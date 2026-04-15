@@ -1,0 +1,30 @@
+{
+	"name": "borrow-checker",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"directories": {
+		"doc": "docs",
+		"test": "test"
+	},
+	"scripts": {
+		"test": "npm run --silent typecheck && node --test test/*.test.ts",
+		"check-external": "node cli/check-opaque.ts '../jsql/src/parser/**/*.ts' '../jsql/src/engine/**/*.ts' --opaque ../jsql/src/parser/sql-tokens.ts TokensList --reader ../jsql/src/parser/sql-tokens.ts PeekToken --consumer ../jsql/src/parser/sql-tokens.ts SkipToken",
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsgo -p tsconfig.json --noEmit"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"type": "module",
+	"dependencies": {
+		"fast-glob": "^3.3.3",
+		"tsx": "^4.21.0",
+		"typescript": "^6.0.2"
+	},
+	"devDependencies": {
+		"@types/node": "^25.6.0",
+		"@typescript/native-preview": "^7.0.0-dev.20260414.1",
+		"prettier": "^3.8.2"
+	}
+}
