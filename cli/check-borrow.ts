@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import path from "node:path"
-import { getOpaqueViolations } from "../src/borrowChecker.ts"
+import { getBorrowViolations } from "../src/borrowChecker.ts"
 import type {
-	OpaqueViolation,
+	BorrowViolation,
 	ForcedTypeArgumentOption,
 	NamedTypeOption,
-	OpaqueViolationsOptions,
+	BorrowViolationsOptions,
 } from "../src/types.ts"
 import { formatSourceSnippetFromOffsets } from "./format-source-snippet.ts"
 import { readTypesFromFiles } from "./read-types-from-files.ts"
@@ -26,7 +26,7 @@ type SnippetConfig = {
 type ParsedCli = {
 	globs: string[]
 	snippet: SnippetConfig
-	checkerOptions: OpaqueViolationsOptions
+	checkerOptions: BorrowViolationsOptions
 }
 
 const USAGE = `Usage: node check-opaque.ts [options] <glob> [glob...]
@@ -77,10 +77,10 @@ try {
 	}))
 
 	const sourceByPath = new Map(preparedFiles.map(file => [file.filePath, file.source] as const))
-	const declarationPathById = new Map(loaded.parsed.types.map(type => [type.id, type.path] as const))
+	const declarationPathById = new Map(loaded.parsed.types.values().map(type => [type.id, type.path] as const))
 	const violations: RenderViolation[] = []
 
-	const fileViolations = getOpaqueViolations(loaded.parsed, cli.checkerOptions)
+	const fileViolations = getBorrowViolations(loaded.parsed, cli.checkerOptions)
 	for (const violation of fileViolations) {
 		const rendered = toRenderableViolation(violation, declarationPathById, sourceByPath)
 		if (rendered) violations.push(rendered)
@@ -145,7 +145,7 @@ type RenderViolation = {
 }
 
 function toRenderableViolation(
-	violation: OpaqueViolation,
+	violation: BorrowViolation,
 	declarationPathById: Map<string, string>,
 	sourceByPath: Map<string, string>,
 ): RenderViolation | null {

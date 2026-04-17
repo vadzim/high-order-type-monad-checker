@@ -27,7 +27,7 @@ export type ViolationKind =
 	| "opaque.invalidInferConstraint"
 	| "opaque.destructuredBeforeReader"
 
-export type OpaqueViolation = {
+export type BorrowViolation = {
 	declarationId: string
 	kind: ViolationKind
 	message: string
@@ -44,7 +44,7 @@ export type ForcedTypeArgumentOption = NamedTypeOption & {
 	index: number
 }
 
-export type OpaqueViolationsOptions = {
+export type BorrowViolationsOptions = {
 	forcedReaders?: ForcedTypeArgumentOption[]
 	forcedConsumers?: ForcedTypeArgumentOption[]
 	opaqueTypes?: NamedTypeOption[]

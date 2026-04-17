@@ -7,8 +7,8 @@ import ts from "typescript"
 
 export function parseTypes(filePath: string, content: string, options: ParseTypesOptions = {}): ParseTypesResult {
 	const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-	const types: ParsedType[] = []
-	const scopes: Scope[] = []
+	const types = new Map<string, ParsedType>()
+	const scopes = new Map<string, Scope>()
 	const bindingsByScopeId = new Map<string, Map<string, string>>()
 	const pendingInferBindingsByConditionalScopeId = new Map<string, Array<{ name: string; typeId: string }>>()
 	let nextType = 0
@@ -21,7 +21,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 	const mkScopeId = () => `${options.idPrefix ?? "id"}-s-${nextScope++}`
 
 	const rootScopeId = mkScopeId()
-	scopes.push({
+	scopes.set(rootScopeId, {
 		id: rootScopeId,
 		path: filePath,
 		kind: "file",
@@ -34,7 +34,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 	scopeStack.push(rootScopeId)
 
 	const currentScope = () => scopeStack[scopeStack.length - 1]!
-	const scopeById = (id: string): Scope | undefined => scopes.find(s => s.id === id)
+	const scopeById = (id: string): Scope | undefined => scopes.get(id)
 	const bindTypeName = (scopeId: string, name: string, typeId: string) => {
 		const scopeBindings = bindingsByScopeId.get(scopeId) ?? new Map<string, string>()
 		scopeBindings.set(name, typeId)
@@ -62,7 +62,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 
 	const pushScope = (kind: Scope["kind"], node: ts.Node, name?: string): string => {
 		const id = mkScopeId()
-		scopes.push({
+		scopes.set(id, {
 			id,
 			path: filePath,
 			kind,
@@ -99,12 +99,12 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			...cfg,
 		}
 		if (!base.refPath) base.refPath = filePath
-		types.push(base)
+		types.set(base.id, base)
 		return base
 	}
 
 	const addScopeReference = (scopeId: string, typeId: string, node: ts.Node) => {
-		const scope = scopes.find(s => s.id === scopeId)
+		const scope = scopes.get(scopeId)
 		if (!scope) return
 		const pos = toPos(sourceFile, node.getStart(sourceFile), node.getEnd())
 		scope.references.push({ typeId, position: pos })
@@ -120,7 +120,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 
 	const addCallFromTypeNode = (node: ts.TypeNode) => {
 		if (!ts.isTypeReferenceNode(node)) return
-		const scope = scopes.find(s => s.id === currentScope())
+		const scope = scopes.get(currentScope())
 		if (!scope) return
 		const callTypeName = node.typeName.getText(sourceFile)
 		const callTypeId = resolveTypeIdByName(callTypeName, currentScope())
@@ -256,7 +256,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 								sourceFile,
 								part.typeParameter.constraint.getStart(sourceFile),
 								part.typeParameter.constraint.getEnd(),
-						  )
+							)
 						: undefined,
 				})
 				const conditionalScope = findNearestScopeByKind(currentScope(), "conditional")
@@ -345,9 +345,8 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			popScope()
 		}
 	}
-	const typeById = new Map(types.map(t => [t.id, t]))
 	for (const [typeId, extendsName] of pendingExtendsByTypeId.entries()) {
-		const parsedType = typeById.get(typeId)
+		const parsedType = types.get(typeId)
 		if (!parsedType) continue
 		const resolvedTypeId = resolveTypeIdByName(extendsName, parsedType.scopeId)
 		if (!resolvedTypeId) continue
@@ -357,7 +356,10 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 		}
 	}
 
-	return { types, scopes }
+	return {
+		types,
+		scopes,
+	}
 }
 
 export type ParseTypesOptions = {
@@ -365,8 +367,8 @@ export type ParseTypesOptions = {
 }
 
 export type ParseTypesResult = {
-	types: ParsedType[]
-	scopes: Scope[]
+	types: Map<string, ParsedType>
+	scopes: Map<string, Scope>
 }
 
 export type ParsedType = {

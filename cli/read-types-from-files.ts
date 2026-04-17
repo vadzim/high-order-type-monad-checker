@@ -18,8 +18,8 @@ export async function readTypesFromFiles(masks: string[], options: ParseTypesOpt
 	)
 
 	const parsed: ParseTypesResult = {
-		types: parsedFiles.flatMap(({ types }) => types),
-		scopes: parsedFiles.flatMap(({ scopes }) => scopes),
+		types: new Map(parsedFiles.values().flatMap(({ types }) => types.entries())),
+		scopes: new Map(parsedFiles.values().flatMap(({ scopes }) => scopes.entries())),
 	}
 
 	return { files, parsed }

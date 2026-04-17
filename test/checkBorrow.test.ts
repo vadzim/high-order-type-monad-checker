@@ -1,8 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { parseTypes } from "../src/parseTypes.ts"
-import { getOpaqueViolations } from "../src/borrowChecker.ts"
-import { opaqueSamples } from "./checkOpaque.samples.ts"
+import { getBorrowViolations } from "../src/borrowChecker.ts"
+import { opaqueSamples } from "./checkBorrow.samples.ts"
 
 function sampleHeader(source: string): string {
 	return source.split("\n")[0]?.replace("//", "").trim() ?? "unknown"
@@ -16,7 +16,7 @@ test("checkOpaque sample matrix", async (t: import("node:test").TestContext) => 
 		const header = sampleHeader(source)
 		await t.test(`${idx + 1}. ${header}`, () => {
 			const parsed = parseTypes(filePath, source, { idPrefix: `sample-${idx}` })
-			const violations = getOpaqueViolations(parsed, {
+			const violations = getBorrowViolations(parsed, {
 				opaqueTypes: [
 					{ path: "../samples/file.ts", name: "O" },
 					{ path: "../samples/api.ts", name: "Opaque" },
@@ -48,7 +48,7 @@ test("checker throws when no opaqueTypes provided", () => {
 	const parsed = parseTypes("/samples/no-opaque-option.ts", source, {
 		idPrefix: "missing-opaque-option",
 	})
-	assert.throws(() => getOpaqueViolations(parsed), /requires at least one opaque type in options\.opaqueTypes/i)
+	assert.throws(() => getBorrowViolations(parsed), /requires at least one opaque type in options\.opaqueTypes/i)
 })
 
 test("forced reader slot applies only selected argument index", () => {
@@ -60,7 +60,7 @@ type X<A extends O> = [Pair<A, string>, Pair<number, A>];
 	const parsed = parseTypes("/samples/file.ts", source, {
 		idPrefix: "test",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/file.ts", name: "O" }],
 		forcedReaders: [{ path: "/samples/file.ts", name: "Pair", index: 0 }],
 	})
@@ -76,7 +76,7 @@ type X<A extends O> = [Pair<A, A>, Pair<A, A>];
 	const parsed = parseTypes("/samples/file.ts", source, {
 		idPrefix: "forced-consumer",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/file.ts", name: "O" }],
 		forcedReaders: [{ path: "/samples/file.ts", name: "Pair", index: 0 }],
 	})
@@ -92,7 +92,7 @@ type X<A extends O> = [R<A>, R<A>];
 	const parsed = parseTypes("/samples/file.ts", source, {
 		idPrefix: "forced-consumer-override",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/file.ts", name: "O" }],
 		forcedConsumers: [{ path: "/samples/file.ts", name: "R", index: 0 }],
 	})
@@ -107,7 +107,7 @@ type X<U> = U extends infer A extends Secret<string> ? A : never;
 	const parsed = parseTypes("/samples/explicit-opaque.ts", source, {
 		idPrefix: "explicit-opaque",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/explicit-opaque.ts", name: "Secret" }],
 	})
 	assert.ok(violations.some(v => v.kind === "opaque.invalidInferConstraint"))
@@ -124,7 +124,7 @@ type Z<U> = U extends infer A extends Secret<string> ? A : never;
 	const parsed = parseTypes("/samples/merge-opaque.ts", source, {
 		idPrefix: "merge-opaque",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/merge-opaque.ts", name: "Secret" }],
 	})
 	const kinds = new Set(violations.map(v => v.kind))
@@ -141,7 +141,7 @@ type X<A extends O> = G<A>;
 	const parsed = parseTypes("/samples/related-position.ts", source, {
 		idPrefix: "related-position",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/related-position.ts", name: "O" }],
 	})
 	const v = violations.find(x => x.kind === "opaque.invalidGenericArgumentConstraint")
@@ -157,7 +157,7 @@ type X<T> = T extends infer A extends [Secret] ? A : never;
 	const parsed = parseTypes("/samples/main.ts", source, {
 		idPrefix: "imported-option-resolution",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/opaque", name: "Secret" }],
 	})
 	assert.ok(!violations.some(v => v.kind === "opaque.invalidInferConstraint"))
@@ -171,7 +171,7 @@ type X<A extends O> = ExternalFn<A>;
 	const parsed = parseTypes("/samples/unresolved-forced-ok.ts", source, {
 		idPrefix: "unresolved-forced-ok",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/unresolved-forced-ok.ts", name: "O" }],
 		forcedConsumers: [{ path: "/samples/api.ts", name: "ExternalFn", index: 0 }],
 	})
@@ -187,7 +187,7 @@ type X<Tokens extends O> = ReadExpectedIdentifier<Tokens, "err">;
 	const parsed = parseTypes("/samples/unresolved-imported-generic-ok.ts", source, {
 		idPrefix: "unresolved-imported-generic-ok",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/unresolved-imported-generic-ok.ts", name: "O" }],
 	})
 	assert.ok(
@@ -205,7 +205,7 @@ type X<A extends O> = Pair<A, A>;
 	const parsed = parseTypes("/samples/resolved-forced-fail.ts", source, {
 		idPrefix: "resolved-forced-fail",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/resolved-forced-fail.ts", name: "O" }],
 		forcedReaders: [{ path: "/samples/resolved-forced-fail.ts", name: "Pair", index: 0 }],
 	})
@@ -224,7 +224,7 @@ type X<A extends O, C extends A> = G<C>;
 	const parsed = parseTypes("/samples/chained-opaque-constraint.ts", source, {
 		idPrefix: "chained-opaque-constraint",
 	})
-	const violations = getOpaqueViolations(parsed, {
+	const violations = getBorrowViolations(parsed, {
 		opaqueTypes: [{ path: "/samples/chained-opaque-constraint.ts", name: "O" }],
 	})
 	assert.ok(

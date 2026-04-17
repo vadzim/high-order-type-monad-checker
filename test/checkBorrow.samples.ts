@@ -361,6 +361,16 @@ export type X<T extends Opaque> =
 		? C<readonly [T2, T2], []>
 		: never`,
 	},
+	{
+		source: `// fail: consuming inferred
+import { Read, Consume, Opaque } from "./api.ts";
+export type X<T extends Opaque> =
+	Read<T> extends "("
+		? T["a"] extends infer R extends string
+			? Y<ParseSqlTokens<R>, R, []>
+			: never
+		: X<Consume<T>>`,
+	},
 ]
 
 export const opaqueSamples: OpaqueSample[] = [...baseSamples]

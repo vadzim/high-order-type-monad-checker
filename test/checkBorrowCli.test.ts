@@ -17,7 +17,7 @@ async function withTempFile(source: string, fn: (filePath: string) => void | Pro
 }
 
 function runCli(args: string[]) {
-	return spawnSync(process.execPath, ["cli/check-opaque.ts", ...args], {
+	return spawnSync(process.execPath, ["cli/check-borrow.ts", ...args], {
 		cwd: path.resolve(process.cwd()),
 		encoding: "utf8",
 	})
@@ -105,7 +105,10 @@ type X<A extends O> = G<A>;
 	await withTempFile(source, filePath => {
 		const out = runCli(["--opaque", filePath, "O", filePath])
 		assert.equal(out.status, 1, out.stderr)
-		assert.match(out.stderr, /Type 'A' is opaque \('O'\), so generic 'G' must declare its 1st parameter as 'A extends O'\./)
+		assert.match(
+			out.stderr,
+			/Type 'A' is opaque \('O'\), so generic 'G' must declare its 1st parameter as 'A extends O'\./,
+		)
 		assert.match(out.stderr, /\n\s+.*generic declaration:/)
 		assert.match(out.stderr, /\n\s*\|\s*~+/m)
 	})

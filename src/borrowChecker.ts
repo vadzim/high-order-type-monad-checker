@@ -1,7 +1,7 @@
 import type {
-	OpaqueViolationsOptions,
+	BorrowViolationsOptions,
 	OpaqueArgConstraint,
-	OpaqueViolation,
+	BorrowViolation,
 	ForcedTypeArgumentOption,
 } from "./types.ts"
 import type { Position, Scope } from "./parseTypes.ts"
@@ -12,29 +12,34 @@ import type { ParseTypesResult } from "./parseTypes.ts"
 // - evaluate borrow rules over parseTypes output
 // - emit violations only (no CLI/output formatting concerns)
 
-export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViolationsOptions = {}): OpaqueViolation[] {
+export function getBorrowViolations(input: ParseTypesResult, options: BorrowViolationsOptions = {}): BorrowViolation[] {
 	// console.log("getOpaqueViolations", options)
 
 	if (!options.opaqueTypes?.length) {
 		throw new Error("getOpaqueViolations requires at least one opaque type in options.opaqueTypes.")
 	}
-	const violations: OpaqueViolation[] = []
+	const violations: BorrowViolation[] = []
 
-	const typeById = new Map(input.types.map(t => [t.id, t]))
-	const typeNameById = new Map(input.types.map(t => [t.id, t.name]))
-	const declarationTypeById = new Map(input.types.filter(t => t.kind === "typeAlias").map(t => [t.id, t] as const))
+	const typeById = input.types
+	const typeNameById = new Map(input.types.values().map(t => [t.id, t.name]))
+	const declarationTypeById = new Map(
+		input.types
+			.values()
+			.filter(t => t.kind === "typeAlias")
+			.map(t => [t.id, t] as const),
+	)
 	const declarationTypeIdByScopeId = new Map([...declarationTypeById.values()].map(t => [t.scopeId, t.id] as const))
 	const declarationTypeIdByPathAndName = new Map<string, string>()
 	const importedTypeIdsByRefPathAndName = new Map<string, string[]>()
 	const pathNameKey = (path: string, name: string) => `${path}::${name}`
-	for (const parsedType of input.types) {
+	for (const parsedType of input.types.values()) {
 		if (parsedType.kind !== "typeAlias" && parsedType.kind !== "interface" && parsedType.kind !== "class") continue
 		const key = pathNameKey(parsedType.path, parsedType.name)
 		if (!declarationTypeIdByPathAndName.has(key)) {
 			declarationTypeIdByPathAndName.set(key, parsedType.id)
 		}
 	}
-	for (const parsedType of input.types) {
+	for (const parsedType of input.types.values()) {
 		if (parsedType.kind !== "imported") continue
 		const referencedName = parsedType.refName ?? parsedType.name
 		const curr = importedTypeIdsByRefPathAndName.get(pathNameKey(parsedType.refPath, referencedName)) ?? []
@@ -42,7 +47,7 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 		importedTypeIdsByRefPathAndName.set(pathNameKey(parsedType.refPath, referencedName), curr)
 	}
 	const actualDeclarationTypeIdByTypeId = new Map<string, string>()
-	for (const parsedType of input.types) {
+	for (const parsedType of input.types.values()) {
 		if (parsedType.kind === "imported") {
 			const referencedName = parsedType.refName ?? parsedType.name
 			const actualId = declarationTypeIdByPathAndName.get(pathNameKey(parsedType.refPath, referencedName))
@@ -132,9 +137,9 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 		return typeNameById.get(identityTypeId)
 	}
 
-	const scopeById = new Map(input.scopes.map(scope => [scope.id, scope]))
+	const scopeById = input.scopes
 	const childrenByScopeId = new Map<string, Scope[]>()
-	for (const scope of input.scopes) {
+	for (const scope of input.scopes.values()) {
 		if (!scope.parentScopeId) continue
 		const curr = childrenByScopeId.get(scope.parentScopeId) ?? []
 		curr.push(scope)
@@ -142,8 +147,11 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 	}
 	const extendsByDeclarationScopeId = new Map<string, Map<string, string>>()
 	const inferExtendsByDeclarationTypeId = new Map<string, Map<string, { typeId?: string }>>()
-	const opaqueInferVarsByDeclarationTypeId = new Map<string, Array<{ name: string; typeId: string; opaqueName: string }>>()
-	for (const parsedType of input.types) {
+	const opaqueInferVarsByDeclarationTypeId = new Map<
+		string,
+		Array<{ name: string; typeId: string; opaqueName: string }>
+	>()
+	for (const parsedType of input.types.values()) {
 		if (!parsedType.extends?.typeId) continue
 		if (parsedType.kind !== "typeParameter") continue
 		const typeScope = scopeById.get(parsedType.scopeId)
@@ -154,7 +162,7 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 		}
 		extendsByDeclarationScopeId.get(declScopeId)!.set(parsedType.name, parsedType.extends.typeId)
 	}
-	for (const parsedType of input.types) {
+	for (const parsedType of input.types.values()) {
 		if (parsedType.kind !== "infer" || parsedType.extends === undefined) continue
 		let scopeId: string | null | undefined = parsedType.scopeId
 		let declarationTypeId: string | undefined
@@ -291,6 +299,32 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 			const checkRange = conditionalScope.conditionalCheckPosition
 			const extendsRange = conditionalScope.conditionalExtendsPosition
 			if (!checkRange || !extendsRange) continue
+			const isReferenceConsumedInCheck = (ref: { typeId: string; position: Position }): boolean => {
+				const containingCalls = conditionalScope.calls
+					.flatMap(call =>
+						call.arguments.map((arg, idx) => ({
+							call,
+							idx,
+							arg,
+							contains: arg.position.start <= ref.position.start && arg.position.end >= ref.position.end,
+						})),
+					)
+					.filter(x => x.contains)
+					.sort(
+						(a, b) =>
+							a.arg.position.end - a.arg.position.start - (b.arg.position.end - b.arg.position.start),
+					)
+				for (const item of containingCalls) {
+					const key = slotKey(toActualDeclarationTypeId(item.call.typeId), item.idx)
+					if (forcedConsumerSlotKeys.has(key)) return true
+					if (forcedReaderSlotKeys.has(key)) {
+						const isDirectReaderArgument =
+							item.arg.position.start === ref.position.start && item.arg.position.end === ref.position.end
+						if (isDirectReaderArgument) return false
+					}
+				}
+				return true
+			}
 			const inferOpaqueName = (inferType: {
 				id: string
 				scopeId: string
@@ -329,16 +363,30 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 				return declarationScopeIds.has(type.scopeId)
 			})
 			if (!leftRefs.length) continue
+			const leftConsumedRefs = leftRefs.filter(ref => isReferenceConsumedInCheck(ref))
+			if (!leftConsumedRefs.length) continue
 			const rightInferTypes = (childrenByScopeId.get(conditionalScope.id) ?? [])
 				.filter(scope => scope.kind === "infer" && scope.name)
 				.map(scope => {
-					const inferType = input.types.find(t => t.kind === "infer" && t.scopeId === scope.id && t.name === scope.name)
+					const inferType = input.types
+						.values()
+						.find(t => t.kind === "infer" && t.scopeId === scope.id && t.name === scope.name)
 					return inferType
 				})
 				.filter((t): t is NonNullable<typeof t> => Boolean(t))
+			const leftOpaqueNameResolved = leftConsumedRefs
+				.map(ref => typeById.get(ref.typeId))
+				.filter((type): type is NonNullable<typeof type> => Boolean(type))
+				.map(type => opaqueVars.get(type.name))
+				.find((name): name is string => Boolean(name))
 			const rightOpaqueInfers = rightInferTypes
-				.map(inferType => ({ inferType, opaqueName: inferOpaqueName(inferType) }))
-				.filter((x): x is { inferType: (typeof rightInferTypes)[number]; opaqueName: string } => Boolean(x.opaqueName))
+				.map(inferType => ({
+					inferType,
+					opaqueName: inferOpaqueName(inferType) ?? leftOpaqueNameResolved,
+				}))
+				.filter((x): x is { inferType: (typeof rightInferTypes)[number]; opaqueName: string } =>
+					Boolean(x.opaqueName),
+				)
 			const rightOpaqueNameFromInfer = rightOpaqueInfers[0]?.opaqueName
 			const rightOpaqueNameFromRefs = conditionalScope.references
 				.filter(ref => ref.position.start >= extendsRange.start && ref.position.end <= extendsRange.end)
@@ -347,7 +395,7 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 			const rightOpaqueName = rightOpaqueNameFromInfer ?? rightOpaqueNameFromRefs
 			if (!rightOpaqueName) continue
 			const leftTypeIds: string[] = []
-			for (const ref of leftRefs) {
+			for (const ref of leftConsumedRefs) {
 				const leftType = typeById.get(ref.typeId)
 				if (!leftType) continue
 				const wasAlreadyOpaque = opaqueVarTypeIds.has(leftType.id)
@@ -472,11 +520,10 @@ export function getOpaqueViolations(input: ParseTypesResult, options: OpaqueViol
 			})
 		}
 		for (const badInfer of stage.invalidOpaqueInferConstraints) {
-			const isKnownOpaqueName =
-				[...explicitOpaqueTypeIds]
-					.map(typeId => typeNameById.get(typeId))
-					.filter(Boolean)
-					.includes(badInfer.opaqueName)
+			const isKnownOpaqueName = [...explicitOpaqueTypeIds]
+				.map(typeId => typeNameById.get(typeId))
+				.filter(Boolean)
+				.includes(badInfer.opaqueName)
 			if (isKnownOpaqueName) {
 				violations.push({
 					declarationId: ctx.declType.id,
@@ -714,7 +761,7 @@ function propagateReaderKinds(args: PropagateReaderKindsArgs): Set<string> {
 	return discoveredReaderSlots
 }
 
-function collectPathViolations(args: CollectPathViolationsArgs): OpaqueViolation[] {
+function collectPathViolations(args: CollectPathViolationsArgs): BorrowViolation[] {
 	const toActualDeclarationTypeId = (typeId: string): string =>
 		args.typeIdToActualDeclarationTypeId.get(typeId) ?? typeId
 	const callForcedOptionKeys = (callTypeId: string, genericName: string, index: number): string[] => {
@@ -756,7 +803,7 @@ function collectPathViolations(args: CollectPathViolationsArgs): OpaqueViolation
 		if (!inScope.has(targetTypeId)) inScope.set(targetTypeId, position)
 		firstConsumeByScopeId.set(scopeId, inScope)
 	}
-	const violations: OpaqueViolation[] = []
+	const violations: BorrowViolation[] = []
 	for (const ctx of args.contexts.values()) {
 		const uses: UseInPath[] = []
 		for (const scope of ctx.subtreeScopes) {
