@@ -9,7 +9,7 @@
 	},
 	"scripts": {
 		"test": "npm run --silent typecheck && node --test test/*.test.ts",
-		"check-external": "node cli/check-monad.ts '../jsql/src/parser/**/*.ts' '../jsql/src/engine/**/*.ts' --monad ../jsql/src/parser/sql-tokens.ts TokensList --reader ../jsql/src/parser/sql-tokens.ts PeekToken --consumer ../jsql/src/parser/sql-tokens.ts SkipToken",
+		"check-external": "node cli/check-monad.ts '../jsql/src/parser/**/*.ts' '../jsql/src/engine/**/*.ts' --monad ../jsql/src/parser/sql-tokens.ts TokensList --skip-body ../jsql/src/parser/sql-tokens.ts PeekToken --skip-body ../jsql/src/parser/sql-tokens.ts SkipToken",
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsgo -p tsconfig.json --noEmit"
 	},

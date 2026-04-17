@@ -20,8 +20,6 @@ If a type is marked as monad, then any type variable that extends that monad typ
 
 Readers are not counted as consumptions of the monad type. A generic is a reader for an monad argument only when that argument is not referenced in the generic body. For example, `type R<A extends O> = 1` is a reader, while `type R<A extends O> = A` is a consumer. If `V` extends monad type `T` and `R` is a reader, then `R<V>` does not consume `T` and may appear any number of times in a type declaration body. Only usages of `V` that are not wrapped in a reader call are counted.
 
-The engine can be explicitly instructed to treat a given generic argument position in a given file as a reader or consumer. For example, `{ name: "Pair", index: 0 }` marks only the first argument of `Pair<_, _>` as reader semantics.
-
 If a type variable `A` extending an monad type is wrapped in anything before being passed to a reader, that counts as a consumption. For example, if `R` is a reader and `C` is a consumer (non-reader):
 
 - `R<A>` — does **not** consume `A`
@@ -61,9 +59,8 @@ Output:
 Input:
 
 - `parsed`: `ParseTypesResult` from `parseTypes`.
-- `options.forcedReaders[path]`: list of `{ name, index }` entries that force a specific generic argument position to be treated as a reader.
-- `options.forcedConsumers[path]`: list of `{ name, index }` entries that force a specific generic argument position to be treated as a consumer.
-- `options.monadTypes[path]`: list of `{ name }` entries for types to treat as monad for this check pass.
+- `options.monadTypes`: list of `{ path, name }` entries for types to treat as monad for this check pass.
+- `options.skipDeclarationBodies` (optional): list of `{ path, name }` for type aliases / interfaces / classes whose **definition bodies** are excluded from reported violations (same path + name resolution as `monadTypes`). Call sites in other declarations are still checked.
 
 Output:
 
@@ -112,8 +109,8 @@ Conditional bodies are represented as ternary-tree paths:
     - Covered by `fail: wrapped before reader counts consume`, `fail: consumer inside reader argument`, generated invalid wrapped samples.
 - **Reader transitivity**
     - Covered by `ok: nested readers remain reader` and generated ok samples through reader wrappers.
-- **Forced reader/consumer support**
-    - Covered in checker tests (`checker skips forcibly marked reader declaration`, `checker skips forcibly marked consumer declaration`).
+- **Skip declaration body**
+    - Covered by `skipDeclarationBodies drops violations attributed to that declaration` in `test/checkMonad.test.ts`.
 - **Monad generic argument constraint match**
     - Covered by `ok: monad argument passed to constrained parameter` and `fail: generic target parameter lacks monad constraint`.
 - **No monad variable usage in conditional check**

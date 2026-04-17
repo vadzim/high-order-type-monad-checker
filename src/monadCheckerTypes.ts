@@ -1,4 +1,4 @@
-import { Position } from "./parseTypes.ts"
+import type { Position } from "./parseContent.ts"
 
 export type MonadArgConstraint = {
 	genericName: string
@@ -27,6 +27,7 @@ export type ViolationKind =
 	| "monad.invalidInferConstraint"
 	| "monad.destructuredBeforeReader"
 	| "monad.inconsistentBranchReturn"
+	| "monad.monadArgRequiresMonadBoundParameter"
 
 export type MonadViolation = {
 	declarationId: string
@@ -34,6 +35,8 @@ export type MonadViolation = {
 	message: string
 	position: Position
 	relatedPosition?: Position
+	/** When set with `relatedPosition`, positions are resolved in this type's source file (e.g. imported callee). */
+	relatedDeclarationId?: string
 }
 
 export type NamedTypeOption = {
@@ -41,12 +44,11 @@ export type NamedTypeOption = {
 	name: string
 }
 
-export type ForcedTypeArgumentOption = NamedTypeOption & {
-	index: number
-}
-
 export type MonadViolationsOptions = {
-	forcedReaders?: ForcedTypeArgumentOption[]
-	forcedConsumers?: ForcedTypeArgumentOption[]
 	monadTypes: NamedTypeOption[]
+	/**
+	 * Named declarations (file path + type name, same resolution as `--monad`) for which
+	 * no violations are reported on code inside that declaration's body.
+	 */
+	skipDeclarationBodies?: NamedTypeOption[]
 }

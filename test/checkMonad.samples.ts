@@ -1,17 +1,25 @@
-import type { ViolationKind } from "../src/types.ts"
+import type { ViolationKind } from "../src/monadCheckerTypes.ts"
 
 export type MonadSample =
 	| `// ok: ${string}`
 	| `// fail: ${string}`
 	| {
 			expectedKinds?: undefined
-			source: `// ok: ${string}`
 			file?: string
+			source: `// ok: ${string}`
 	  }
 	| {
 			expectedKinds?: ViolationKind[]
-			source: `// fail: ${string}`
 			file?: string
+			source: `// fail: ${string}`
+	  }
+	| {
+			expectedKinds?: ViolationKind[]
+			test: `ok: ${string}` | `fail: ${string}`
+			modules: {
+				file: string
+				source: string
+			}[]
 	  }
 
 const baseSamples: MonadSample[] = [
@@ -127,6 +135,110 @@ type P<A extends Monad> = 1 extends number ? [A, 4] : [4, A];
 	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
 import { Monad } from "./api.ts";
 type P<A extends Monad> = { a: A };
+`,
+	{
+		test: "ok: monadic type can be used only at the argument of monadic type",
+		modules: [
+			{
+				file: "../samples/s1.ts",
+				source: `
+import { Monad } from "./api.ts";
+export type P<X, Y, A extends Monad> = [1, A];
+`,
+			},
+			{
+				file: "../samples/s2.ts",
+				source: `
+import { Monad } from "./api.ts";
+import { P } from "./s1.ts";
+type P2<A extends Monad> = P<1, 2, A>;
+`,
+			},
+		],
+	},
+	{
+		test: "fail: monadic type cannot be used at the argument of 'unknown' type",
+		modules: [
+			{
+				file: "../samples/s1.ts",
+				source: `
+import { Monad } from "./api.ts";
+export type P<X, Y, A extends unknown> = [1, A];
+`,
+			},
+			{
+				file: "../samples/s2.ts",
+				source: `
+import { Monad } from "./api.ts";
+import { P } from "./s1.ts";
+type P2<A extends Monad> = P<1, 2, A>;
+`,
+			},
+		],
+	},
+	{
+		test: "fail: monadic type cannot be used at the argument of non-monadic type",
+		modules: [
+			{
+				file: "../samples/s1.ts",
+				source: `
+import { Monad } from "./api.ts";
+export type P<X, Y, A extends [Monad]> = [1, A];
+`,
+			},
+			{
+				file: "../samples/s2.ts",
+				source: `
+import { Monad } from "./api.ts";
+import { P } from "./s1.ts";
+type P2<A extends Monad> = P<1, 2, A>;
+`,
+			},
+		],
+	},
+	{
+		test: "fail: monadic type cannot be used at the argument without type",
+		modules: [
+			{
+				file: "../samples/s1.ts",
+				source: `
+import { Monad } from "./api.ts";
+export type P<X, Y, A> = [1, A];
+`,
+			},
+			{
+				file: "../samples/s2.ts",
+				source: `
+import { Monad } from "./api.ts";
+import { P } from "./s1.ts";
+type P2<A extends Monad> = P<1, 2, A>;
+`,
+			},
+		],
+	},
+	`// ok: monad-compatible type variable can be used twice in different branches of the same scope
+import { Monad } from "./api.ts";
+type P<A extends Monad> = 1 extends 2 ? A : [A];
+`,
+	`// ok: monad-compatible type variable can be used twice in different branches of the same scope 2
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [A] extends 2 ? 1 : 2;
+`,
+	`// ok: different monad-compatible type variable can be used twice in the same scope
+import { Monad } from "./api.ts";
+type P<A extends Monad> = B extends Monad ? [A, B] extends 2 ? 1 : 2 : 3;
+`,
+	`// fail: monad-compatible type variable cannot be used twice in the same scope
+import { Monad } from "./api.ts";
+type P<A extends Monad> = 1 extends 2 ? A : [A, [A]];
+`,
+	`// fail: monad-compatible type variable cannot be used twice in the same scope 2
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [A, A] extends 2 ? 1 : 2;
+`,
+	`// fail: monad-compatible type variable cannot be used again once it was used in an ascedent scope
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [A] extends 2 ? A : 2;
 `,
 	// 	`// ok: monadic type is returned by a generic type which does not accept other monadic types in its parameter list
 	// import { Monad } from "./api.ts";

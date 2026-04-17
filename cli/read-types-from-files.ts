@@ -1,15 +1,14 @@
 import fg from "fast-glob"
 import { readFile } from "node:fs/promises"
-import { parseTypes } from "../src/parseTypes.ts"
-import type { ParseTypesOptions, ParseTypesResult } from "../src/parseTypes.ts"
+import { parseFilesContent } from "../src/parseContent.ts"
+import type { ParseTypesOptions, ParseTypesResult } from "../src/parseContent.ts"
 
-export async function readTypesFromFiles(
-	masks: string[],
-	options: ParseTypesOptions = {},
-): Promise<{
-	files: Map<string, string>
-	parsed: Map<string, ParseTypesResult>
-}> {
+export type ParseFilesResult = {
+	files: ReadonlyMap<string, string>
+	parsed: ReadonlyMap<string, ParseTypesResult>
+}
+
+export async function readTypesFromFiles(masks: string[], options: ParseTypesOptions = {}): Promise<ParseFilesResult> {
 	const paths = await fg(masks, { onlyFiles: true, unique: true })
 
 	const files = new Map(
@@ -18,14 +17,7 @@ export async function readTypesFromFiles(
 		),
 	)
 
-	const parsed = new Map(
-		files
-			.entries()
-			.map(([path, content], index) => [
-				path,
-				parseTypes(path, content, { idPrefix: `${options.idPrefix ?? ""}f-${index}:` }),
-			]),
-	)
+	const parsed = parseFilesContent(files, options)
 
 	return { files, parsed }
 }

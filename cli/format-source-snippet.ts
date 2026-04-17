@@ -1,4 +1,4 @@
-import type { Position } from "../src/parseTypes.ts"
+import type { Position } from "../src/parseContent.ts"
 
 export type SourceHighlight = {
 	/** 1-based line number. */
@@ -35,8 +35,6 @@ export type FormatSourceSnippetOptions = {
 	contextBefore?: number
 	/** Lines below the highlighted line (default 0). */
 	contextAfter?: number
-	/** Force ANSI colors even when stdout is not a TTY. */
-	forceColor?: boolean
 	/** Strip ANSI sequences (no colors / no reversed line numbers). */
 	noColor?: boolean
 	/** Tab width for aligning markers when lines contain tab characters (default {@link DEFAULT_SNIPPET_TAB_WIDTH}). */
@@ -52,8 +50,14 @@ const DIAG_ANSI = {
 	lightYellow: "\x1b[93m",
 } as const
 
-export function formatDiagnosticHeader(file: string, line: number, column: number, message: string): string {
-	if (!useAnsiForStderr()) {
+function formatDiagnosticHeader(
+	file: string,
+	line: number,
+	column: number,
+	message: string,
+	options: FormatSourceSnippetOptions,
+): string {
+	if (!useAnsi(options)) {
 		return `${file}:${line}:${column} - ${message}`
 	}
 	return `${DIAG_ANSI.lightCyan}${file}${DIAG_ANSI.reset}:${DIAG_ANSI.lightYellow}${line}${DIAG_ANSI.reset}:${DIAG_ANSI.lightYellow}${column}${DIAG_ANSI.reset} - ${message}`
@@ -64,10 +68,10 @@ export function formatSourceSnippetFromOffsets(
 	message: string,
 	source: string,
 	pos: OffsetRange,
-	options?: FormatSourceSnippetOptions,
+	options: FormatSourceSnippetOptions = {},
 ): string {
 	const resolved = resolveDiagnosticFromOffsets(source, pos)
-	const header = formatDiagnosticHeader(file, resolved.line, resolved.column, message)
+	const header = formatDiagnosticHeader(file, resolved.line, resolved.column, message, options)
 	const snippet = formatSourceSnippet(source, resolved.anchor, options)
 	return `${header}\n${snippet}`
 }
@@ -94,10 +98,10 @@ export function resolveDiagnosticFromOffsets(source: string, pos: OffsetRange): 
  * then a red `~` marker of length `anchor.textLength` starting at column derived from `anchor.startPos`
  * on `anchor.line`.
  */
-export function formatSourceSnippet(
+function formatSourceSnippet(
 	source: string,
 	anchor: FormatSourceSnippetAnchor,
-	options?: FormatSourceSnippetOptions,
+	options: FormatSourceSnippetOptions,
 ): string {
 	const before = options?.contextBefore ?? 3
 	const after = options?.contextAfter ?? 0
@@ -150,12 +154,7 @@ const ansi = {
 
 function useAnsi(options?: FormatSourceSnippetOptions): boolean {
 	if (options?.noColor) return false
-	if (options?.forceColor) return true
-	return typeof process !== "undefined" && Boolean(process.stdout?.isTTY)
-}
-
-function useAnsiForStderr(): boolean {
-	return typeof process !== "undefined" && Boolean(process.stderr?.isTTY)
+	return true
 }
 
 function gutterWidthForRange(startLine: number, endLine: number): number {
