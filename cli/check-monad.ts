@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 
 import path from "node:path"
-import { getBorrowViolations } from "../src/borrowChecker.ts"
+import { getMonadViolations } from "../src/monadChecker.ts"
 import type {
-	BorrowViolation,
+	MonadViolation,
 	ForcedTypeArgumentOption,
 	NamedTypeOption,
-	BorrowViolationsOptions,
+	MonadViolationsOptions,
 } from "../src/types.ts"
 import { formatSourceSnippetFromOffsets } from "./format-source-snippet.ts"
 import { readTypesFromFiles } from "./read-types-from-files.ts"
 
 // CLI responsibility boundary:
 // - parse argv and read files
-// - delegate semantic decisions to parseTypes + borrowChecker
+// - delegate semantic decisions to parseTypes + monadChecker
 // - render checker diagnostics for humans
 
 class EInvalidOption extends Error {}
@@ -26,10 +26,10 @@ type SnippetConfig = {
 type ParsedCli = {
 	globs: string[]
 	snippet: SnippetConfig
-	checkerOptions: BorrowViolationsOptions
+	checkerOptions: MonadViolationsOptions
 }
 
-const USAGE = `Usage: node check-opaque.ts [options] <glob> [glob...]
+const USAGE = `Usage: node check-monad.ts [options] <glob> [glob...]
 
 Options:
   --snippet-lines <before>[:<after>]
@@ -39,8 +39,8 @@ Options:
       Examples: 7, 7:2, :2.
 
 Repeatable options:
-  --opaque <file> <type-name>
-      Branded / leaf opaque identity to enforce.
+  --monad <file> <type-name>
+      Branded / leaf monad identity to enforce.
   --consumer <file> <spec>
       Marks consumer slots for a generic (or leaf). <spec> is
       TypeName or TypeName:<index> (0-based type parameter index).
@@ -51,36 +51,38 @@ Repeatable options:
       With no indices, defaults to slot 0 (same as TypeName:0).
 
 Resolves files with fast-glob, runs readTypes per file, then reports
-getOpaqueViolations() for each provided opaque type identity (each run
+getMonadViolations() for each provided monad type identity (each run
 receives the same --consumer list).
 
 Options and globs may appear in any order. Exit 1 if any violation, if
-no --opaque is provided, if globs are missing, or if no files match.`
+no --monad is provided, if globs are missing, or if no files match.`
 
 try {
 	const cli = parseCli(process.argv.slice(2))
-	if (!cli.checkerOptions.opaqueTypes?.length) {
-		throw new EInvalidOption("Missing required --opaque option.")
+	if (!cli.checkerOptions.monadTypes?.length) {
+		throw new EInvalidOption("Missing required --monad option.")
 	}
 	if (!cli.globs.length) {
 		throw new EInvalidOption("Missing required glob arguments.")
 	}
 
-	const loaded = await readTypesFromFiles(cli.globs, { idPrefix: "check-opaque" })
-	if (!loaded.files.length) {
+	const loaded = await readTypesFromFiles(cli.globs, { idPrefix: "check-monad" })
+	if (loaded.files.size === 0) {
 		throw new EInvalidOption("No files matched the provided globs.")
 	}
 
-	const preparedFiles = loaded.files.map(file => ({
-		filePath: path.join(file.path),
-		source: file.content,
+	const preparedFiles = [...loaded.files.entries()].map(([filePath, source]) => ({
+		filePath: path.join(filePath),
+		source,
 	}))
 
 	const sourceByPath = new Map(preparedFiles.map(file => [file.filePath, file.source] as const))
-	const declarationPathById = new Map(loaded.parsed.types.values().map(type => [type.id, type.path] as const))
+	const declarationPathById = new Map(
+		[...loaded.parsed.values()].flatMap(({ types }) => [...types.values()].map(type => [type.id, type.path] as const)),
+	)
 	const violations: RenderViolation[] = []
 
-	const fileViolations = getBorrowViolations(loaded.parsed, cli.checkerOptions)
+	const fileViolations = getMonadViolations(loaded.parsed, cli.checkerOptions)
 	for (const violation of fileViolations) {
 		const rendered = toRenderableViolation(violation, declarationPathById, sourceByPath)
 		if (rendered) violations.push(rendered)
@@ -145,7 +147,7 @@ type RenderViolation = {
 }
 
 function toRenderableViolation(
-	violation: BorrowViolation,
+	violation: MonadViolation,
 	declarationPathById: Map<string, string>,
 	sourceByPath: Map<string, string>,
 ): RenderViolation | null {
@@ -161,7 +163,7 @@ function toRenderableViolation(
 		message: violation.message,
 		position: primary,
 		relatedLabel:
-			violation.kind === "opaque.invalidGenericArgumentConstraint"
+			violation.kind === "monad.invalidGenericArgumentConstraint"
 				? "generic declaration:"
 				: "first consumption occurs here:",
 		related: related
@@ -180,7 +182,7 @@ function normalizePosition(pos: { start: number; end: number }, source: string):
 
 function parseCli(argv: string[]): ParsedCli {
 	const globs: string[] = []
-	const opaqueSpecs: NamedTypeOption[] = []
+	const monadSpecs: NamedTypeOption[] = []
 	const consumerSpecs: ForcedTypeArgumentOption[] = []
 	const readerSpecs: ForcedTypeArgumentOption[] = []
 	let snippet: SnippetConfig = { before: 4, after: 0 }
@@ -196,11 +198,11 @@ function parseCli(argv: string[]): ParsedCli {
 			i += 2
 			continue
 		}
-		if (token === "--opaque") {
+		if (token === "--monad") {
 			const file = argv[i + 1]
 			const typeName = argv[i + 2]
-			if (!file || !typeName) throw new EInvalidOption("Usage: --opaque <file> <type-name>")
-			opaqueSpecs.push({ path: path.join(file), name: typeName })
+			if (!file || !typeName) throw new EInvalidOption("Usage: --monad <file> <type-name>")
+			monadSpecs.push({ path: path.join(file), name: typeName })
 			i += 3
 			continue
 		}
@@ -225,7 +227,7 @@ function parseCli(argv: string[]): ParsedCli {
 		globs,
 		snippet,
 		checkerOptions: {
-			opaqueTypes: opaqueSpecs,
+			monadTypes: monadSpecs,
 			forcedConsumers: consumerSpecs,
 			forcedReaders: readerSpecs,
 		},

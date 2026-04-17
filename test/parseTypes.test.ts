@@ -141,7 +141,7 @@ const parserCases = [
 	},
 	{
 		name: "infer creates scope and inferred type",
-		source: `type A<X> = X extends infer T extends O ? T : never; type O = {__opaque:"O"};`,
+		source: `type A<X> = X extends infer T extends O ? T : never; type O = {__monad:"O"};`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const scopes = scopeList(result)
 			const types = typeList(result)
@@ -182,7 +182,7 @@ const parserCases = [
 	},
 	{
 		name: "duplicate type parameter names in nested scopes",
-		source: `type A<T extends O> = T extends infer T extends O ? T : never; type O = {__opaque:"O"};`,
+		source: `type A<T extends O> = T extends infer T extends O ? T : never; type O = {__monad:"O"};`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const params = typeList(result).filter(
 				t => t.name === "T" && (t.kind === "typeParameter" || t.kind === "infer"),
@@ -193,7 +193,7 @@ const parserCases = [
 	},
 	{
 		name: "mixed declarations captured",
-		source: `type A = string; interface B {}; class C<T extends O> {}; type O = {__opaque:"O"};`,
+		source: `type A = string; interface B {}; class C<T extends O> {}; type O = {__monad:"O"};`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const types = typeList(result)
 			assert.equal(
@@ -212,7 +212,7 @@ const parserCases = [
 	},
 	{
 		name: "parseTypes keeps declaration role neutral",
-		source: `type Consume<A extends O> = [A]; type O = {__opaque:"O"};`,
+		source: `type Consume<A extends O> = [A]; type O = {__monad:"O"};`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const t = typeList(result).find(x => x.name === "Consume")
 			assert.ok(t)
@@ -221,7 +221,7 @@ const parserCases = [
 	},
 	{
 		name: "declaration metadata produced",
-		source: `type O = {__opaque:"O"}; type X<A extends O> = A;`,
+		source: `type O = {__monad:"O"}; type X<A extends O> = A;`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const x = typeList(result).find(t => t.kind === "typeAlias" && t.name === "X")
 			assert.ok(x)
@@ -231,7 +231,7 @@ const parserCases = [
 	},
 	{
 		name: `import path normalization`,
-		source: `import type { T1 } from "../mod1"; type X1<A extends O> = T1; type O = {__opaque:"O"};`,
+		source: `import type { T1 } from "../mod1"; type X1<A extends O> = T1; type O = {__monad:"O"};`,
 		verify: (result: ReturnType<typeof parseTypes>) => {
 			const imported = typeList(result).find(t => t.kind === "imported" && t.name === `T1`)
 			assert.ok(imported)

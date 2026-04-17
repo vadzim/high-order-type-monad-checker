@@ -1,9 +1,9 @@
 import { Position } from "./parseTypes.ts"
 
-export type OpaqueArgConstraint = {
+export type MonadArgConstraint = {
 	genericName: string
 	parameterName: string
-	opaqueName: string
+	monadName: string
 	argumentName: string
 	position: Position
 	relatedPosition?: Position
@@ -21,13 +21,14 @@ export type TypeUsage = {
 }
 
 export type ViolationKind =
-	| "opaque.consumeMultipleInPath"
-	| "opaque.usedInCondition"
-	| "opaque.invalidGenericArgumentConstraint"
-	| "opaque.invalidInferConstraint"
-	| "opaque.destructuredBeforeReader"
+	| "monad.consumeMultipleInPath"
+	| "monad.usedInCondition"
+	| "monad.invalidGenericArgumentConstraint"
+	| "monad.invalidInferConstraint"
+	| "monad.destructuredBeforeReader"
+	| "monad.inconsistentBranchReturn"
 
-export type BorrowViolation = {
+export type MonadViolation = {
 	declarationId: string
 	kind: ViolationKind
 	message: string
@@ -44,8 +45,8 @@ export type ForcedTypeArgumentOption = NamedTypeOption & {
 	index: number
 }
 
-export type BorrowViolationsOptions = {
+export type MonadViolationsOptions = {
 	forcedReaders?: ForcedTypeArgumentOption[]
 	forcedConsumers?: ForcedTypeArgumentOption[]
-	opaqueTypes?: NamedTypeOption[]
+	monadTypes: NamedTypeOption[]
 }

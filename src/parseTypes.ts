@@ -3,12 +3,13 @@ import ts from "typescript"
 
 // parseTypes responsibility boundary:
 // - build a syntax-derived graph (types/scopes/references/calls)
-// - do not perform any analysis, stay policy-neutral (no reader/consumer/borrow rule decisions)
+// - do not perform any analysis, stay policy-neutral (no reader/consumer/monad rule decisions)
 
 export function parseTypes(filePath: string, content: string, options: ParseTypesOptions = {}): ParseTypesResult {
 	const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 	const types = new Map<string, ParsedType>()
 	const scopes = new Map<string, Scope>()
+	const usages: TypeUsage[] = []
 	const bindingsByScopeId = new Map<string, Map<string, string>>()
 	const pendingInferBindingsByConditionalScopeId = new Map<string, Array<{ name: string; typeId: string }>>()
 	let nextType = 0
@@ -93,6 +94,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			name,
 			path: filePath,
 			refPath: filePath,
+			refName: name,
 			scopeId: currentScope(),
 			kind,
 			position: toPos(sourceFile, start, node.getEnd()),
@@ -111,11 +113,16 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 	}
 
 	const addReferenceFromTypeNode = (node: ts.TypeNode) => {
-		if (!ts.isTypeReferenceNode(node)) return
-		const typeName = node.typeName.getText(sourceFile)
-		const typeId = resolveTypeIdByName(typeName, currentScope())
-		if (!typeId) return
-		addScopeReference(currentScope(), typeId, node.typeName)
+		if (ts.isTypeReferenceNode(node)) {
+			const typeName = node.typeName.getText(sourceFile)
+			const typeId = resolveTypeIdByName(typeName, currentScope())
+			if (!typeId) return
+			addScopeReference(currentScope(), typeId, node.typeName)
+			return
+		}
+		const intrinsic = intrinsicTypeName(node)
+		if (!intrinsic) return
+		addScopeReference(currentScope(), `global:${intrinsic}`, node)
 	}
 
 	const addCallFromTypeNode = (node: ts.TypeNode) => {
@@ -213,6 +220,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 
 	const collectTypeStructure = (node: ts.TypeNode) => {
 		const walk = (part: ts.TypeNode) => {
+			addReferenceFromTypeNode(part)
 			if (ts.isConditionalTypeNode(part)) {
 				const conditionalScopeId = pushScope("conditional", part)
 				const conditionalScope = scopeById(conditionalScopeId)
@@ -236,10 +244,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 				}
 				walk(part.trueType)
 				popScope()
-				const branchFalseScopeId = pushScope("branchFalse", part.falseType)
-				for (const inferBinding of pendingInferBindingsByConditionalScopeId.get(conditionalScopeId) ?? []) {
-					bindTypeName(branchFalseScopeId, inferBinding.name, inferBinding.typeId)
-				}
+				pushScope("branchFalse", part.falseType)
 				walk(part.falseType)
 				popScope()
 				popScope()
@@ -258,6 +263,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 								part.typeParameter.constraint.getEnd(),
 							)
 						: undefined,
+					inferPlacement: classifyInferPlacement(part),
 				})
 				const conditionalScope = findNearestScopeByKind(currentScope(), "conditional")
 				if (conditionalScope) {
@@ -266,22 +272,23 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 					pendingInferBindingsByConditionalScopeId.set(conditionalScope.id, inferBindings)
 				}
 				if (extendsName) pendingExtendsByTypeId.set(inferType.id, extendsName)
-				if (part.typeParameter.constraint) {
-					addReferenceFromTypeNode(part.typeParameter.constraint)
-					addCallFromTypeNode(part.typeParameter.constraint)
-				}
+				if (part.typeParameter.constraint) collectTypeRefs(part.typeParameter.constraint)
 				popScope()
 				return
 			}
 			if (ts.isTypeReferenceNode(part)) {
 				addCallFromTypeNode(part)
-				addReferenceFromTypeNode(part)
 			}
-			ts.forEachChild(part, child => {
-				if (ts.isTypeNode(child)) {
-					walk(child)
-				}
-			})
+			const visitNestedTypeNodes = (current: ts.Node) => {
+				ts.forEachChild(current, child => {
+					if (ts.isTypeNode(child)) {
+						walk(child)
+						return
+					}
+					visitNestedTypeNodes(child)
+				})
+			}
+			visitNestedTypeNodes(part)
 		}
 		walk(node)
 	}
@@ -314,6 +321,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			popScope()
 			declType.arguments = typeParameters.map(tp => ({ typeId: tp.typeId }))
 			collectTypeStructure(stmt.type)
+			collectTypeUsages(stmt.type, declScopeId)
 			popScope()
 			continue
 		}
@@ -345,7 +353,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			popScope()
 		}
 	}
-	for (const [typeId, extendsName] of pendingExtendsByTypeId.entries()) {
+	for (const [typeId, extendsName] of pendingExtendsByTypeId) {
 		const parsedType = types.get(typeId)
 		if (!parsedType) continue
 		const resolvedTypeId = resolveTypeIdByName(extendsName, parsedType.scopeId)
@@ -356,9 +364,58 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 		}
 	}
 
-	return {
-		types,
-		scopes,
+	return { types, scopes, usages }
+
+	function collectTypeUsages(node: ts.TypeNode, declarationScopeId: string) {
+		type UsageCtx = { kind: TypeUsageKind; wrapped: boolean }
+		const walk = (part: ts.TypeNode, ctx: UsageCtx) => {
+			if (ts.isTypeReferenceNode(part)) {
+				const typeName = part.typeName.getText(sourceFile)
+				const typeId = resolveTypeIdByName(typeName, currentScope())
+				usages.push({
+					typeId,
+					position: toPos(sourceFile, part.typeName.getStart(sourceFile), part.typeName.getEnd()),
+					declarationScopeId,
+					kind: ctx.kind,
+					wrapped: ctx.wrapped,
+				})
+				const args = part.typeArguments ?? []
+				for (const [idx, arg] of args.entries()) {
+					walk(arg, {
+						kind: idx === args.length - 1 ? "genericArgLast" : "genericArgNonLast",
+						wrapped: ctx.wrapped,
+					})
+				}
+				return
+			}
+			if (ts.isConditionalTypeNode(part)) {
+				walk(part.checkType, { kind: "conditionalCheck", wrapped: ctx.wrapped })
+				walk(part.extendsType, { kind: "conditionalExtends", wrapped: ctx.wrapped })
+				walk(part.trueType, { kind: "other", wrapped: ctx.wrapped })
+				walk(part.falseType, { kind: "other", wrapped: ctx.wrapped })
+				return
+			}
+			if (ts.isTupleTypeNode(part)) {
+				for (const [idx, el] of part.elements.entries()) {
+					walk(el, {
+						kind: part.elements.length === 2 && idx === 1 ? "tupleSecondOfTwo" : "tupleOther",
+						wrapped: ctx.wrapped || ctx.kind === "genericArgLast" || ctx.kind === "genericArgNonLast",
+					})
+				}
+				return
+			}
+			const visitNestedTypeNodes = (current: ts.Node) => {
+				ts.forEachChild(current, child => {
+					if (ts.isTypeNode(child)) {
+						walk(child, { kind: "other", wrapped: true })
+						return
+					}
+					visitNestedTypeNodes(child)
+				})
+			}
+			visitNestedTypeNodes(part)
+		}
+		walk(node, { kind: "other", wrapped: false })
 	}
 }
 
@@ -369,6 +426,7 @@ export type ParseTypesOptions = {
 export type ParseTypesResult = {
 	types: Map<string, ParsedType>
 	scopes: Map<string, Scope>
+	usages: TypeUsage[]
 }
 
 export type ParsedType = {
@@ -376,16 +434,18 @@ export type ParsedType = {
 	name: string
 	path: string
 	refPath: string
-	refName?: string
+	refName: string
 	scopeId: string
 	kind: ParsedTypeKind
 	position: Position
 	extends?: { typeId?: string }
 	constraintPosition?: Position
+	inferPlacement?: InferPlacement
 	arguments?: Array<{ typeId: string }>
 }
 
 export type ParsedTypeKind = "typeAlias" | "interface" | "class" | "imported" | "typeParameter" | "infer"
+export type InferPlacement = "asMonadState" | "other"
 
 export type Position = {
 	start: number
@@ -415,6 +475,23 @@ export type TypeCall = {
 	arguments: TypeReference[]
 }
 
+export type TypeUsageKind =
+	| "conditionalCheck"
+	| "conditionalExtends"
+	| "genericArgLast"
+	| "genericArgNonLast"
+	| "tupleSecondOfTwo"
+	| "tupleOther"
+	| "other"
+
+export type TypeUsage = {
+	typeId: string
+	position: Position
+	declarationScopeId: string
+	kind: TypeUsageKind
+	wrapped: boolean
+}
+
 function toPos(sourceFile: ts.SourceFile, start: number, end: number): Position {
 	return { start, end }
 }
@@ -438,4 +515,14 @@ function intrinsicTypeName(node: ts.TypeNode): string | undefined {
 	if (node.kind === ts.SyntaxKind.AnyKeyword) return "any"
 	if (node.kind === ts.SyntaxKind.ObjectKeyword) return "object"
 	return undefined
+}
+
+function classifyInferPlacement(node: ts.InferTypeNode): InferPlacement {
+	const tuple = ts.isTupleTypeNode(node.parent) ? node.parent : undefined
+	if (!tuple) return "other"
+	if (tuple.elements.length !== 2) return "other"
+	if (tuple.elements[1] !== node) return "other"
+	if (!tuple.parent || !ts.isConditionalTypeNode(tuple.parent)) return "other"
+	if (tuple.parent.extendsType !== tuple) return "other"
+	return "asMonadState"
 }
