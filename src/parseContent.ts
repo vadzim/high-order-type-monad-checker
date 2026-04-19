@@ -364,11 +364,11 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 				condScope.calls.push(buildTypeCall(part.extendsType))
 			}
 			const branchTrueScopeId = pushScope("branchTrue", part.trueType)
-			const trueScope = scopes.get(branchTrueScopeId)
-			if (trueScope) trueScope.calls.push(buildTypeCall(part.trueType))
 			for (const inferBinding of pendingInferBindingsByConditionalScopeId.get(conditionalScopeId) ?? []) {
 				bindTypeName(branchTrueScopeId, inferBinding.name, inferBinding.typeId)
 			}
+			const trueScope = scopes.get(branchTrueScopeId)
+			if (trueScope) trueScope.calls.push(buildTypeCall(part.trueType))
 			walkScopes(part.trueType)
 			popScope()
 			const branchFalseScopeId = pushScope("branchFalse", part.falseType)
@@ -621,6 +621,26 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 			popScope()
 		}
 	}
+
+	// Type references that appear before their file-local declaration were resolved as
+	// `global:<name>` during the linear walk. Re-point those calls to the same-file binding
+	// once all top-level names exist (e.g. `infer R extends TokensList` before `TokensList`).
+	function rewriteDeferredFileLocalTypeReferences() {
+		const rootBindings = bindingsByScopeId.get(rootScopeId)
+		if (!rootBindings) return
+		const visit = (c: TypeCall): void => {
+			if (c.kind !== "call") return
+			if (c.typeId.startsWith("global:")) {
+				const name = c.typeId.slice("global:".length)
+				const local = rootBindings.get(name)
+				if (local) c.typeId = local
+			}
+			for (const a of c.arguments) visit(a)
+		}
+		for (const scope of scopes.values()) for (const root of scope.calls) visit(root)
+	}
+	rewriteDeferredFileLocalTypeReferences()
+
 	return { types, scopes }
 }
 

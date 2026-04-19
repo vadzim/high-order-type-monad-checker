@@ -2,7 +2,7 @@
 
 import path from "node:path"
 import { getMonadViolations } from "../src/monadChecker.ts"
-import type { NamedTypeOption, MonadViolationsOptions } from "../src/monadCheckerTypes.ts"
+import type { MonadTypePairOption, MonadViolationsOptions } from "../src/monadCheckerTypes.ts"
 import { readTypesFromFiles } from "./read-types-from-files.ts"
 import { formatViolation } from "./format-violation.ts"
 import type { FormatSourceSnippetOptions } from "./format-source-snippet.ts"
@@ -31,12 +31,10 @@ Options:
       Examples: 7, 7:2, :2.
 
 Repeatable options:
-  --monad <file> <type-name>
-      Branded / leaf monad identity to enforce.
-  --skip-body <file> <type-name>
-      Do not report violations for code inside that type alias / interface /
-      class body (same path + name resolution as --monad). Call sites in
-      other types are still checked.
+  --monad <file> <type-name>:<type-private-name>
+      Public monad brand plus a paired private declaration. No diagnostics are reported
+      for code inside the private declaration. For producer rules elsewhere it is treated
+      like a return of \`[result, Monad]\` (including direct calls to that private producer).
 
 Resolves files with fast-glob, runs readTypes per file, then reports
 getMonadViolations() for each provided monad type identity.
@@ -95,8 +93,7 @@ try {
 
 function parseCli(argv: string[]): ParsedCli {
 	const globs: string[] = []
-	const monadSpecs: NamedTypeOption[] = []
-	const skipBodySpecs: NamedTypeOption[] = []
+	const monadSpecs: MonadTypePairOption[] = []
 	let options: FormatSourceSnippetOptions = { contextBefore: 4, contextAfter: 0 }
 
 	let i = 0
@@ -113,17 +110,29 @@ function parseCli(argv: string[]): ParsedCli {
 		}
 		if (token === "--monad") {
 			const file = argv[i + 1]
-			const typeName = argv[i + 2]
-			if (!file || !typeName) throw new EInvalidOption("Usage: --monad <file> <type-name>")
-			monadSpecs.push({ path: path.join(file), name: typeName })
-			i += 3
-			continue
-		}
-		if (token === "--skip-body") {
-			const file = argv[i + 1]
-			const typeName = argv[i + 2]
-			if (!file || !typeName) throw new EInvalidOption("Usage: --skip-body <file> <type-name>")
-			skipBodySpecs.push({ path: path.join(file), name: typeName })
+			const typePair = argv[i + 2]
+			if (!file || !typePair) {
+				throw new EInvalidOption("Usage: --monad <file> <type-name>:<type-private-name>")
+			}
+			const colonIdx = typePair.indexOf(":")
+			if (colonIdx <= 0 || colonIdx === typePair.length - 1) {
+				throw new EInvalidOption(
+					"Invalid --monad type pair. Expected <type-name>:<type-private-name> (private name is required).",
+				)
+			}
+			const publicName = typePair.slice(0, colonIdx)
+			const privateName = typePair.slice(colonIdx + 1)
+			if (!publicName || !privateName || privateName.includes(":")) {
+				throw new EInvalidOption(
+					"Invalid --monad type pair. Expected <type-name>:<type-private-name> (private name is required).",
+				)
+			}
+			if (publicName === privateName) {
+				throw new EInvalidOption(
+					"Invalid --monad type pair: <type-name> and <type-private-name> must be different declarations.",
+				)
+			}
+			monadSpecs.push({ path: path.join(file), name: publicName, privateName })
 			i += 3
 			continue
 		}
@@ -139,7 +148,6 @@ function parseCli(argv: string[]): ParsedCli {
 		options,
 		checkerOptions: {
 			monadTypes: monadSpecs,
-			skipDeclarationBodies: skipBodySpecs.length ? skipBodySpecs : undefined,
 		},
 	}
 }

@@ -22,128 +22,201 @@ export type MonadSample =
 			}[]
 	  }
 
-const baseSamples: MonadSample[] = [
-	`// ok: type returns only monadic or never
+export const monadSamples: MonadSample[] = [
+	`// ok: producer returns tuple with monad in second slot
 import { Monad } from "./api.ts";
-type Z = F extends Monad ? F : 1 extends 2 ? F : never;
+type P<A extends Monad> = [1, A];
 `,
-	`// fail: type mixes monadic and non-monadic terminal returns
+	{
+		source: `// fail: producer before extends must not be wrapped in [Producer<…>]; use Producer<…> extends …
 import { Monad } from "./api.ts";
-type Z = F extends Monad ? F : 1 extends 2 ? F : number;
+type Read<Msg extends string, T extends Monad> = [Msg, T];
+type Parse<T extends Monad> = [Read<"x", T>] extends [
+	infer Name extends string,
+	infer Rest extends Monad,
+]
+	? [Name, Rest]
+	: never;
 `,
-	`// fail: generic type mixes monadic and non-monadic return (param)
+		expectedKinds: ["monad.invalidProducerInvocation"],
+	},
+	`// ok: producer before extends is bare Read<…>, not [Read<…>]
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : N;
+type Read<Msg extends string, T extends Monad> = [Msg, T];
+type Parse<T extends Monad> = Read<"x", T> extends [
+	infer Name extends string,
+	infer Rest extends Monad,
+]
+	? [Name, Rest]
+	: never;
 `,
-	`// fail: generic type mixes monadic and non-monadic return (tuple)
+	`// ok: tuple second slot may be a type alias to infer…extends monad-like (jsql EmptyTokenList-style)
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : [];
+type StreamAlias = 1 extends infer R extends Monad ? R : never;
+type P<A extends Monad> = [0, StreamAlias];
 `,
-	`// fail: branches return different monad-compatible types
+	{
+		test: "ok: forward-decl stream alias then imported tuple second (jsql sql-tokens order)",
+		modules: [
+			{
+				file: "../samples/forward-stream.ts",
+				source: `
+import type { Monad } from "./api.ts";
+export type EmptyStream = 1 extends infer R extends TokensStream ? R : never;
+export type TokensStream = Monad;
+`,
+			},
+			{
+				file: "../samples/forward-use.ts",
+				source: `
+import type { EmptyStream } from "./forward-stream.ts";
+import type { Monad } from "./api.ts";
+export type P<A extends Monad> = [0, EmptyStream];
+`,
+			},
+		],
+	},
+	{
+		source: `// fail: monad value passed to Read's first generic (not Monad-bound), not invalidProducerReturn on [Name, Rest]
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : Monad;
+type Read<Msg extends string, T extends Monad> = [Msg, T];
+type Parse<T extends Monad> = [Read<T, "">] extends [
+	infer Name extends string,
+	infer Rest extends Monad,
+]
+	? [Name, Rest]
+	: never;
 `,
-	`// fail: branch returns wrapped monadic value
+		expectedKinds: ["monad.monadArgRequiresMonadBoundParameter"],
+	},
+	{
+		source: `// fail: monad value passed to not Monad-bound parameter, not invalidProducerReturn on [Name, Rest]
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : [F];
+type Read<Msg extends string, T> = [Msg, T];
+type Parse<T extends Monad> = [Read<"", T>] extends [
+	infer Name extends string,
+	infer Rest extends Monad,
+]
+	? [Name, Rest]
+	: never;
 `,
-	`// fail: branch returns object-wrapped monadic value
+		expectedKinds: ["monad.monadArgRequiresMonadBoundParameter"],
+	},
+	`// ok: monad-compatible generic parameter in last slot is allowed
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : { f: F };
+type P<X, A extends Monad> = [X, A];
 `,
-	`// fail: branch returns recursive non-direct type
+	`// fail: monad-compatible generic parameter in non-last slot is forbidden
 import { Monad } from "./api.ts";
-type P<N extends number> = F extends Monad ? F : 1 extends 2 ? F : P<1>;
+type P<A extends Monad, X> = [X, A];
 `,
-	`// fail: non-generic monadic alias cannot be mixed with non-monadic return
+	`// ok: producer can return call to another producer
 import { Monad } from "./api.ts";
-type F = Monad
-type P<N extends number> = 1 extends 2 ? F : 2;
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = P<A>;
 `,
-	`// fail: conditional alias resolving to monadic cannot be mixed
+	`// ok: producer can return never
 import { Monad } from "./api.ts";
-type F = 2 extends number ? Monad : never
-type P<N extends number> = 1 extends 2 ? F : 2;
+type P<A extends Monad> = never;
 `,
-	`// ok: monad-compatible generic parameter is allowed only in last slot
+	`// ok: constructor type can return monad as single direct result
 import { Monad } from "./api.ts";
-type P1<A extends Monad> = 1
-type P2<X1, A extends Monad> = 1
-type P2<X1, X2 extends number, A extends Monad> = 1
+type Build = Monad;
 `,
-	`// fail: monad-compatible generic parameter in non-last slot (simple)
+	`// ok: generic declaration without monad input can return monad and becomes monad-compatible
 import { Monad } from "./api.ts";
-type P2<A extends Monad, X1> = 1
+type Wrap<T> = Monad;
 `,
-	`// fail: monad-compatible generic parameter in non-last slot (mixed)
+	`// ok: declaration without monad input may return monad or never
 import { Monad } from "./api.ts";
-type F = 2 extends number ? Monad : never
-type P2<X2, A extends F, X1, X3 extends string> = 1
+type X<T> = T extends 1 ? Monad : never;
 `,
-	`// ok: monad-compatible infer allowed only as tuple[1] in 2-tuple
+	{
+		source: `// fail: declaration without monad input cannot mix monad and non-monad terminal returns
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends [infer H, infer R extends Monad] ? R : never;
+type X<T> = T extends 1 ? Monad : 1;
 `,
-	`// fail: monad-compatible infer in tuple[0] is forbidden
+		expectedKinds: ["monad.inconsistentBranchReturn"],
+	},
+	`// fail: constructor type cannot return monad as tuple second element
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends [infer H extends Monad, infer R] ? R : never;
+type Build = [1, Monad];
 `,
-	`// fail: top-level monad-compatible infer is forbidden
+	{
+		source: `// fail: monad variable cannot be used twice in the same scope
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends infer R extends Monad ? R : never;
+type P<A extends Monad> = [A, A];
 `,
-	`// fail: monad-compatible infer in 3-tuple is forbidden
+		expectedKinds: ["monad.consumeMultipleInPath"],
+	},
+	{
+		source: `// fail: monad variable cannot be reused in child scope after parent usage
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends [infer H, infer R extends Monad, infer S] ? R : never;
+type P<A extends Monad> = [A] extends [infer X] ? A : never;
 `,
-	`// fail: monad-compatible infer inside object pattern is forbidden
+		expectedKinds: ["monad.consumeMultipleInPath"],
+	},
+	{
+		source: `// ok: monad variable can be used in sibling conditional branches
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends { r: infer R extends Monad } ? R : never;
+type P<A extends Monad> = 1 extends 2 ? [0, A] : [1, A];
 `,
-	`// fail: monad-compatible infer inside generic argument is forbidden
+	},
+	`// ok: paired private body not diagnosed; call to private producer counts as [result, monad-like] return
+import { Monad, MonadPrivate } from "./api.ts";
+type ViaPrivate<A extends Monad> = MonadPrivate<A>;
+`,
+	`// fail: producer declaration cannot return a conditional infer result
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends X<infer R extends Monad> ? R : never;
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = P<A> extends [infer H, infer M extends Monad] ? M : never;
 `,
-	`// fail: monad-compatible infer in nested tuple is forbidden
+	`// fail: producer must not return bare monad type
 import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends [[infer H, infer R extends Monad]] ? R : never;
+type P<A extends Monad> = A;
 `,
-	`// fail: monad-compatible infer in deep nested tuple is forbidden
-import { Monad } from "./api.ts";
-type P<N extends number> = K<N> extends [infer U, [infer H, infer R extends Monad]] ? R : never;
-`,
-	`// ok: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends number ? G<3, A> : [4, A];
-`,
-	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends number ? G<3, [4, A]> : [4, A];
-`,
-	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends A ? G<3, 3> : [4, 4];
-`,
-	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
-import { Monad } from "./api.ts";
-type P<A extends Monad> = A extends 1 ? G<3, 3> : [4, 4];
-`,
-	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends number ? [A, 4] : [4, A];
-`,
-	`// fail: monad-compatible type can only be used as the last parameter to a generic type or as the 2nd element in a 2-tuple as returned value
+	`// fail: producer must not return object wrapper
 import { Monad } from "./api.ts";
 type P<A extends Monad> = { a: A };
 `,
+	`// fail: producer must not return three-item tuple
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A, 3];
+`,
+	`// fail: producer call is forbidden inside generic argument
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A];
+type Wrap<T> = [T];
+type R<A extends Monad> = Wrap<P<A>>;
+`,
+	`// fail: producer call is forbidden inside tuple element
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = [P<A>, A];
+`,
+	`// fail: producer call before extends must be destructured on right side
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = P<A> extends Monad ? A : never;
+`,
+	`// fail: infer extends Monad must be in second slot
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = P<A> extends [infer M extends Monad, infer H] ? M : never;
+`,
+	`// fail: infer in second slot must have extends Monad
+import { Monad } from "./api.ts";
+type P<A extends Monad> = [1, A];
+type R<A extends Monad> = P<A> extends [infer H, infer M] ? M : never;
+`,
 	{
-		test: "ok: monadic type can be used only at the argument of monadic type",
+		test: "ok: cross-file producer chain is allowed",
 		modules: [
 			{
 				file: "../samples/s1.ts",
 				source: `
 import { Monad } from "./api.ts";
-export type P<X, Y, A extends Monad> = [1, A];
+export type P<A extends Monad> = [1, A];
 `,
 			},
 			{
@@ -151,19 +224,19 @@ export type P<X, Y, A extends Monad> = [1, A];
 				source: `
 import { Monad } from "./api.ts";
 import { P } from "./s1.ts";
-type P2<A extends Monad> = P<1, 2, A>;
+type P2<A extends Monad> = P<A>;
 `,
 			},
 		],
 	},
 	{
-		test: "fail: monadic type cannot be used at the argument of 'unknown' type",
+		test: "fail: cross-file callee is not producer",
 		modules: [
 			{
 				file: "../samples/s1.ts",
 				source: `
 import { Monad } from "./api.ts";
-export type P<X, Y, A extends unknown> = [1, A];
+export type P<A extends Monad> = A;
 `,
 			},
 			{
@@ -171,79 +244,17 @@ export type P<X, Y, A extends unknown> = [1, A];
 				source: `
 import { Monad } from "./api.ts";
 import { P } from "./s1.ts";
-type P2<A extends Monad> = P<1, 2, A>;
+type P2<A extends Monad> = P<A>;
 `,
 			},
 		],
 	},
-	{
-		test: "fail: monadic type cannot be used at the argument of non-monadic type",
-		modules: [
-			{
-				file: "../samples/s1.ts",
-				source: `
+	`// fail: wrong usage of monad 1
 import { Monad } from "./api.ts";
-export type P<X, Y, A extends [Monad]> = [1, A];
+type R<A extends Monad> = \`\${A}\` extends infer U ? never : never;
 `,
-			},
-			{
-				file: "../samples/s2.ts",
-				source: `
+	`// fail: wrong usage of monad 2
 import { Monad } from "./api.ts";
-import { P } from "./s1.ts";
-type P2<A extends Monad> = P<1, 2, A>;
+type R<A extends Monad> = A[1] extends infer U ? never : never;
 `,
-			},
-		],
-	},
-	{
-		test: "fail: monadic type cannot be used at the argument without type",
-		modules: [
-			{
-				file: "../samples/s1.ts",
-				source: `
-import { Monad } from "./api.ts";
-export type P<X, Y, A> = [1, A];
-`,
-			},
-			{
-				file: "../samples/s2.ts",
-				source: `
-import { Monad } from "./api.ts";
-import { P } from "./s1.ts";
-type P2<A extends Monad> = P<1, 2, A>;
-`,
-			},
-		],
-	},
-	`// ok: monad-compatible type variable can be used twice in different branches of the same scope
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends 2 ? A : [A];
-`,
-	`// ok: monad-compatible type variable can be used twice in different branches of the same scope 2
-import { Monad } from "./api.ts";
-type P<A extends Monad> = [A] extends 2 ? 1 : 2;
-`,
-	`// ok: different monad-compatible type variable can be used twice in the same scope
-import { Monad } from "./api.ts";
-type P<A extends Monad> = B extends Monad ? [A, B] extends 2 ? 1 : 2 : 3;
-`,
-	`// fail: monad-compatible type variable cannot be used twice in the same scope
-import { Monad } from "./api.ts";
-type P<A extends Monad> = 1 extends 2 ? A : [A, [A]];
-`,
-	`// fail: monad-compatible type variable cannot be used twice in the same scope 2
-import { Monad } from "./api.ts";
-type P<A extends Monad> = [A, A] extends 2 ? 1 : 2;
-`,
-	`// fail: monad-compatible type variable cannot be used again once it was used in an ascedent scope
-import { Monad } from "./api.ts";
-type P<A extends Monad> = [A] extends 2 ? A : 2;
-`,
-	// 	`// ok: monadic type is returned by a generic type which does not accept other monadic types in its parameter list
-	// import { Monad } from "./api.ts";
-	// type P<N extends number> = F extends Monad ? F : never;
-	// `,
 ]
-
-export const monadSamples: MonadSample[] = [...baseSamples]

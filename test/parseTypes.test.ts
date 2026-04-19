@@ -290,6 +290,30 @@ const parserCases = [
 			assert.match(imported!.refPath, new RegExp(`mod1$`))
 		},
 	},
+	{
+		name: "forward file-local type refs resolve after pass (infer extends; jsql EmptyTokenList vs TokensList)",
+		source: `type Early = 1 extends infer R extends Later ? R : never; type Later = string;`,
+		verify: (result: ParseTypesResult) => {
+			const later = typeList(result).find(t => t.name === "Later" && t.kind === "typeAlias")
+			const inferR = typeList(result).find(t => t.kind === "infer" && t.name === "R")
+			assert.ok(later)
+			assert.ok(inferR)
+			let found = false
+			const visit = (c: TypeCall): void => {
+				if (c.kind !== "call") return
+				if (
+					c.typeId === inferR!.id &&
+					c.arguments[0]?.kind === "call" &&
+					c.arguments[0].typeId === later!.id
+				) {
+					found = true
+				}
+				for (const a of c.arguments) visit(a)
+			}
+			for (const s of scopeList(result)) for (const root of s.calls) visit(root)
+			assert.ok(found, "infer constraint should reference local Later id, not global:Later")
+		},
+	},
 ]
 
 test("parseTypes edge matrix", async (t: import("node:test").TestContext) => {

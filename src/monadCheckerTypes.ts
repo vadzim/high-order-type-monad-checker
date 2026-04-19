@@ -25,6 +25,9 @@ export type ViolationKind =
 	| "monad.usedInCondition"
 	| "monad.invalidGenericArgumentConstraint"
 	| "monad.invalidInferConstraint"
+	| "monad.invalidProducerReturn"
+	| "monad.invalidProducerInvocation"
+	| "monad.invalidMonadUsage"
 	| "monad.destructuredBeforeReader"
 	| "monad.inconsistentBranchReturn"
 	| "monad.monadArgRequiresMonadBoundParameter"
@@ -39,16 +42,18 @@ export type MonadViolation = {
 	relatedDeclarationId?: string
 }
 
-export type NamedTypeOption = {
+/** Public monad brand plus a paired “private” declaration that may use the monad parameter freely. */
+export type MonadTypePairOption = {
 	path: string
+	/** Exported / public monad identity (Monad-compatible root). */
 	name: string
+	/**
+	 * Companion declaration in the same file: no diagnostics are attributed to its body.
+	 * For producer / caller checks it is treated like a type that returns `[result, Monad]`.
+	 */
+	privateName: string
 }
 
 export type MonadViolationsOptions = {
-	monadTypes: NamedTypeOption[]
-	/**
-	 * Named declarations (file path + type name, same resolution as `--monad`) for which
-	 * no violations are reported on code inside that declaration's body.
-	 */
-	skipDeclarationBodies?: NamedTypeOption[]
+	monadTypes: MonadTypePairOption[]
 }
