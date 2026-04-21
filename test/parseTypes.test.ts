@@ -1,15 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { parseTypes, type ParseTypesResult, type TypeCall } from "../src/parseContent.ts"
+import { parseTypes, type ParseTypesResult, type ScopeRef, type TypeCall } from "../src/parseContent.ts"
 
 const typeList = (result: ParseTypesResult) => [...result.types.values()]
 const scopeList = (result: ParseTypesResult) => [...result.scopes.values()]
 
-function isCallNode(c: TypeCall): c is Extract<TypeCall, { kind: "call" }> {
+function isCallNode(c: TypeCall | ScopeRef): c is TypeCall {
 	return c.kind === "call"
 }
 
-function assertCallTree(c: TypeCall): void {
+function assertCallTree(c: TypeCall | ScopeRef): void {
 	if (c.kind === "scope") return
 	assert.ok(Array.isArray(c.arguments))
 	for (const a of c.arguments) assertCallTree(a)
@@ -299,13 +299,9 @@ const parserCases = [
 			assert.ok(later)
 			assert.ok(inferR)
 			let found = false
-			const visit = (c: TypeCall): void => {
+			const visit = (c: TypeCall | ScopeRef): void => {
 				if (c.kind !== "call") return
-				if (
-					c.typeId === inferR!.id &&
-					c.arguments[0]?.kind === "call" &&
-					c.arguments[0].typeId === later!.id
-				) {
+				if (c.typeId === inferR!.id && c.arguments[0]?.kind === "call" && c.arguments[0].typeId === later!.id) {
 					found = true
 				}
 				for (const a of c.arguments) visit(a)

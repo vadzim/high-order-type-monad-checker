@@ -4,6 +4,6 @@ export interface Monad {
 
 /**
  * Internal companion declaration paired via CLI `--monad ... Monad:MonadPrivate`.
- * Body is not diagnosed; for other types the checker treats calls to this producer like `[result, Monad]`.
+ * Body is not diagnosed; for other types the checker treats calls to this producer like `[Monad, result]`.
  */
-export type MonadPrivate<A extends Monad> = [1, A]
+export type MonadPrivate<A extends Monad> = [A, 1]

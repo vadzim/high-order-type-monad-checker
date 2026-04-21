@@ -31,6 +31,7 @@ export type ViolationKind =
 	| "monad.destructuredBeforeReader"
 	| "monad.inconsistentBranchReturn"
 	| "monad.monadArgRequiresMonadBoundParameter"
+	| "monad.invalidUsage"
 
 export type MonadViolation = {
 	declarationId: string
@@ -43,17 +44,15 @@ export type MonadViolation = {
 }
 
 /** Public monad brand plus a paired “private” declaration that may use the monad parameter freely. */
-export type MonadTypePairOption = {
+export type MonadTypeOption = {
 	path: string
 	/** Exported / public monad identity (Monad-compatible root). */
 	name: string
-	/**
-	 * Companion declaration in the same file: no diagnostics are attributed to its body.
-	 * For producer / caller checks it is treated like a type that returns `[result, Monad]`.
-	 */
-	privateName: string
+	consumerName: string
+	constructorName: string
+	readerName: string
 }
 
 export type MonadViolationsOptions = {
-	monadTypes: MonadTypePairOption[]
+	monadTypes: MonadTypeOption[]
 }

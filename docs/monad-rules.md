@@ -13,18 +13,18 @@ It focuses on practical validation rules enforced by `check-monad`.
     - producer return shape,
     - where producer calls are allowed,
     - infer pattern in conditional `extends`,
-    - generic last-parameter monad constraints,
+    - generic first-parameter monad constraints,
     - linear (single-use) behavior for monad variables,
     - allowed monad usage positions.
 
 ## Rules
 
-### 1) Monad-compatible generic parameter must be last
+### 1) Monad-compatible generic parameter must be first
 
-If a declaration has a monad-compatible type parameter (`A extends Monad` or equivalent compatible bound), it is only allowed in the last generic parameter slot.
+If a declaration has a monad-compatible type parameter (`A extends Monad` or equivalent compatible bound), it is only allowed in the first generic parameter slot (so later parameters can use defaults without blocking the stream type).
 
-- Valid: `type P<X, A extends Monad> = ...`
-- Invalid: `type P<A extends Monad, X> = ...`
+- Valid: `type P<A extends Monad, X = {}> = ...`
+- Invalid: `type P<X, A extends Monad> = ...`
 
 Violation kind: `monad.invalidGenericArgumentConstraint`
 
@@ -32,8 +32,8 @@ Violation kind: `monad.invalidGenericArgumentConstraint`
 
 A declaration that accepts monad-compatible input must return one of:
 
-1. A 2-item tuple where the second element is monad-compatible:
-    - `[Result, MonadLike]`
+1. A 2-item tuple where the first element is monad-compatible:
+    - `[MonadLike, Result]`
 2. A call to another declaration that is itself a valid monad producer.
 
 Everything else is invalid (bare monad value, object wrapper, 3-tuple, etc.).
@@ -45,7 +45,7 @@ Violation kind: `monad.invalidProducerReturn`
 A monad producer call is allowed only:
 
 1. As a direct terminal return value.
-2. Immediately before `extends` in a conditional check where RHS destructures a 2-item tuple with monad infer constraint (see rule 4).
+2. Immediately before `extends` in a conditional check where RHS destructures a 2-item tuple with monad infer constraint in the first slot (see rule 4).
 
 Any other call site is forbidden.
 
@@ -56,12 +56,12 @@ Violation kind: `monad.invalidProducerInvocation`
 For monad infer constraints, allowed pattern is strict:
 
 - RHS must be exactly a 2-item tuple pattern.
-- Monad-constrained infer must be in slot 2:
-    - `... extends [infer _, infer M extends Monad] ? ... : ...`
+- Monad-constrained infer must be in slot 1:
+    - `... extends [infer M extends Monad, infer _] ? ... : ...`
 
 Invalid examples:
 
-- infer in first slot,
+- infer in second slot,
 - no `extends Monad`,
 - non-tuple RHS,
 - nested/wrapped infer pattern.
@@ -72,8 +72,8 @@ Violation kind: `monad.invalidInferConstraint`
 
 Monad usage is allowed only as:
 
-1. Last generic argument of a callee whose last parameter is monad-bound.
-2. `tuple[1]` in a returned 2-item tuple.
+1. First generic argument of a callee whose first parameter is monad-bound.
+2. `tuple[0]` in a returned 2-item tuple.
 3. A direct single return from a declaration that does not accept monad input.
 
 Any other usage is invalid.
@@ -124,15 +124,15 @@ Violation kind: `monad.inconsistentBranchReturn`
 Current canonical diagnostics (semantic meaning):
 
 - `monad.invalidGenericArgumentConstraint`:
-    - "Monad-compatible type parameters are only allowed in the last generic parameter slot."
+    - "Monad-compatible type parameters are only allowed in the first generic parameter slot."
 - `monad.invalidProducerReturn`:
-    - "Types that accept Monad-compatible parameters must return either a 2-item tuple `[result, Monad]` or a call to another Monad-producing type which returns such a tuple."
+    - "Types that accept Monad-compatible parameters must return either a 2-item tuple `[Monad, result]` or a call to another Monad-producing type which returns such a tuple."
 - `monad.invalidProducerInvocation`:
     - "Monad-producing types may only be invoked as a direct terminal return value or immediately before `extends` with tuple destructuring on the right side."
 - `monad.invalidInferConstraint`:
-    - "Monad-compatible infer constraints are only allowed as the 2nd element in a 2-item tuple pattern."
+    - "Monad-compatible infer constraints are only allowed as the 1st element in a 2-item tuple pattern."
 - `monad.invalidMonadUsage`:
-    - "Monad usage is allowed only as: last generic argument of a callee whose last parameter is Monad-bound, tuple[1] in a returned 2-item tuple, or a direct single return from a declaration that does not accept Monad input."
+    - "Monad usage is allowed only as: first generic argument of a callee whose first parameter is Monad-bound, tuple[0] in a returned 2-item tuple, or a direct single return from a declaration that does not accept Monad input."
 - `monad.consumeMultipleInPath`:
     - "Monad value is linear: after first use it cannot be used again in the same scope or descendant scopes."
 - `monad.inconsistentBranchReturn`:

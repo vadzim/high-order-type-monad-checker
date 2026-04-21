@@ -24,20 +24,20 @@ export function formatViolation(
 
 	const relatedLabel =
 		violation.kind === "monad.invalidGenericArgumentConstraint"
-			? "last generic parameter (monad-compatible types belong here):"
+			? "first generic parameter (monad-compatible types belong here):"
 			: violation.kind === "monad.inconsistentBranchReturn"
 				? "returned monad-like type:"
 				: violation.kind === "monad.invalidProducerReturn"
 					? "expected producer return shape:"
 					: violation.kind === "monad.invalidProducerInvocation"
 						? "producer invocation is only allowed in return/extends pattern:"
-					: violation.kind === "monad.invalidMonadUsage"
-						? "allowed monad-like usage positions:"
-				: violation.kind === "monad.destructuredBeforeReader"
-					? "last generic argument of this call (or second element of a 2-tuple):"
-					: violation.kind === "monad.monadArgRequiresMonadBoundParameter"
-						? "callee declaration, last type parameter:"
-						: "first consumption occurs here:"
+						: violation.kind === "monad.invalidMonadUsage"
+							? "allowed monad-like usage positions:"
+							: violation.kind === "monad.destructuredBeforeReader"
+								? "first generic argument of this call (or first element of a 2-tuple):"
+								: violation.kind === "monad.monadArgRequiresMonadBoundParameter"
+									? "callee declaration, first type parameter:"
+									: "first consumption occurs here:"
 
 	let result = ""
 
@@ -46,9 +46,7 @@ export function formatViolation(
 
 	if (violation.relatedPosition) {
 		const relatedPath =
-			violation.relatedDeclarationId != null
-				? declarationPathById.get(violation.relatedDeclarationId)
-				: filePath
+			violation.relatedDeclarationId != null ? declarationPathById.get(violation.relatedDeclarationId) : filePath
 		const relatedSource = relatedPath != null ? files.get(relatedPath) : undefined
 		if (relatedSource != null && relatedPath != null) {
 			const relatedPos = normalizePosition(violation.relatedPosition, relatedSource)

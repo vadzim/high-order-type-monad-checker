@@ -1,5 +1,5 @@
 import type { MonadViolation } from "./monadCheckerTypes.ts"
-import type { ParsedType, ParseTypesResult, Position, Scope, TypeCall } from "./parseContent.ts"
+import type { ParsedType, ParseTypesResult, Position, Scope, ScopeRef, TypeCall } from "./parseContent.ts"
 
 export function collectLinearMonadReuseViolations(
 	violations: MonadViolation[],
@@ -37,7 +37,7 @@ export function collectLinearMonadReuseViolations(
 }
 
 function walkLinearMonadUsage(
-	c: TypeCall,
+	c: TypeCall | ScopeRef,
 	currentScopeId: string,
 	declarationId: string,
 	consumedByScope: Map<string, Map<string, Position>>,

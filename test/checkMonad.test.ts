@@ -42,7 +42,15 @@ test("checkMonad sample matrix", async (t: import("node:test").TestContext) => {
 			})
 
 			const violations = getMonadViolations(parsed, {
-				monadTypes: [{ path: "../samples/api.ts", name: "Monad", privateName: "MonadPrivate" }],
+				monadTypes: [
+					{
+						path: "../samples/api.ts",
+						name: "Monad",
+						consumerName: "MonadPrivate",
+						constructorName: "MonadConstructor",
+						readerName: "MonadReader",
+					},
+				],
 			})
 
 			const isOk = files.test.startsWith("ok:")

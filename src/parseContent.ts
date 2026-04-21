@@ -35,13 +35,13 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 	>()
 	const inferAstToTypeId = new WeakMap<ts.InferTypeNode, string>()
 
-	const mkTypeCall = (typeId: string, position: Position, args: TypeCall[] = []): TypeCall => ({
+	const mkTypeCall = (typeId: string, position: Position, args: (TypeCall | ScopeRef)[] = []): TypeCall => ({
 		kind: "call",
 		typeId,
 		position,
 		arguments: args,
 	})
-	const mkScopeRef = (scopeId: string): TypeCall => ({ kind: "scope", scopeId })
+	const mkScopeRef = (scopeId: string): ScopeRef => ({ kind: "scope", scopeId })
 
 	const scopeStack: string[] = []
 
@@ -628,7 +628,7 @@ export function parseTypes(filePath: string, content: string, options: ParseType
 	function rewriteDeferredFileLocalTypeReferences() {
 		const rootBindings = bindingsByScopeId.get(rootScopeId)
 		if (!rootBindings) return
-		const visit = (c: TypeCall): void => {
+		const visit = (c: TypeCall | ScopeRef): void => {
 			if (c.kind !== "call") return
 			if (c.typeId.startsWith("global:")) {
 				const name = c.typeId.slice("global:".length)
@@ -672,10 +672,19 @@ export type Position = {
 	end: number
 }
 
+export type ScopeKind =
+	| "file"
+	| "declaration"
+	| "typeParameters"
+	| "conditional"
+	| "infer"
+	| "branchTrue"
+	| "branchFalse"
+
 export type Scope = {
 	id: string
 	path: string
-	kind: "file" | "declaration" | "typeParameters" | "conditional" | "infer" | "branchTrue" | "branchFalse"
+	kind: ScopeKind
 	parentScopeId: string | null
 	name?: string
 	position: Position
@@ -690,17 +699,26 @@ export type Scope = {
  *   `[conditional]` uses three `kind: "scope"` arguments: conditional scope, branchTrue, branchFalse.
  * - `kind: "scope"`: pointer to an existing `Scope.id` (no nested `arguments`).
  */
-export type TypeCall =
+
+type TypeCallOrScopeRef =
 	| {
 			kind: "call"
 			typeId: string
 			position: Position
-			arguments: TypeCall[]
+			arguments: (TypeCall | ScopeRef)[]
 	  }
 	| {
 			kind: "scope"
 			scopeId: string
 	  }
+
+export type TypeCall = TypeCallOrScopeRef & {
+	kind: "call"
+}
+
+export type ScopeRef = TypeCallOrScopeRef & {
+	kind: "scope"
+}
 
 function toPos(start: number, end: number): Position {
 	return { start, end }

@@ -1,6 +1,6 @@
 import "core-js"
-import type { MonadViolationsOptions, MonadViolation, MonadTypePairOption } from "./monadCheckerTypes.ts"
-import type { ParsedType, ParseTypesResult, Position, Scope, TypeCall } from "./parseContent.ts"
+import type { MonadViolationsOptions, MonadViolation, MonadTypeOption } from "./monadCheckerTypes.ts"
+import type { ParsedType, ParseTypesResult, Position, Scope, ScopeRef, TypeCall } from "./parseContent.ts"
 import { collectLinearMonadReuseViolations } from "./monadLinearUsage.ts"
 import { never } from "./utils.ts"
 
@@ -213,13 +213,24 @@ function collectInvalidMonadicInferConstraints(
 			declarationId: declarationType.id,
 			kind: "monad.invalidInferConstraint",
 			message:
-				"A monad-compatible `infer` is only allowed as the entire `extends` target (`Check extends infer Rest extends <monad-like> ? …`, e.g. narrowing to a stream type), or as the second element of a 2-tuple in that position (`[infer _, infer Rest extends <monad-like>]`). The `<monad-like>` type is your `--monad` public type or one promoted as compatible (such as by extending it).",
+				"A monad-compatible `infer` is only allowed as the entire `extends` target (`Check extends infer Rest extends <monad-like> ? …`, e.g. narrowing to a stream type), or as the first element of a 2-tuple in that position (`[infer Rest extends <monad-like>, infer _]`). The `<monad-like>` type is your `--monad` public type or one promoted as compatible (such as by extending it).",
 			position: inferConstraintDiagnosticPosition(extendsCalls, inferType.id, inferType.position),
 		})
 	}
 }
 
-const PSEUDO_TUPLE = "[tuple]"
+function unwrapReadonlyTupleRoot(call: TypeCall): TypeCall {
+	let current: TypeCall = call
+	while (
+		current.kind === "call" &&
+		current.typeId === "[readonly]" &&
+		current.arguments.length === 1 &&
+		current.arguments[0]?.kind === "call"
+	) {
+		current = current.arguments[0]
+	}
+	return current
+}
 
 function inferConstraintDiagnosticPosition(
 	extendsRoots: TypeCall[],
@@ -227,7 +238,7 @@ function inferConstraintDiagnosticPosition(
 	fallback: Position,
 ): Position {
 	let found: Position | undefined
-	const walk = (c: TypeCall): void => {
+	const walk = (c: TypeCall | ScopeRef): void => {
 		if (c.kind !== "call") return
 		if (c.typeId === inferTypeId) {
 			const inner = c.arguments[0]
@@ -270,7 +281,7 @@ function inferMonadConstraintAllowedInConditionalExtendsCalls(
 	if (!extendsRoot || extendsRoot.kind !== "call") return false
 
 	if (
-		inferIsSecondOfTwoTupleAtExtendsRoot(
+		inferIsFirstOfTwoTupleAtExtendsRoot(
 			extendsRoot,
 			inferType.id,
 			monads,
@@ -292,8 +303,8 @@ function inferMonadConstraintAllowedInConditionalExtendsCalls(
 	return false
 }
 
-/** Same rule as former `inferPlacement`: extends-type root must be a 2-tuple and this infer is its second element. */
-function inferIsSecondOfTwoTupleAtExtendsRoot(
+/** Same rule as former `inferPlacement`: extends-type root must be a 2-tuple and this infer is its first element. */
+function inferIsFirstOfTwoTupleAtExtendsRoot(
 	root: TypeCall,
 	inferTypeId: string,
 	monads: Set<string>,
@@ -303,9 +314,11 @@ function inferIsSecondOfTwoTupleAtExtendsRoot(
 	types: Map<string, ParsedType>,
 ): boolean {
 	if (root.kind !== "call") return false
-	if (root.typeId !== PSEUDO_TUPLE || root.arguments.length !== 2) return false
-	const second = root.arguments[1]
-	if (second.kind !== "call" || second.typeId !== inferTypeId) return false
+	const normalizedRoot = unwrapReadonlyTupleRoot(root)
+	if (normalizedRoot.kind !== "call") return false
+	if (normalizedRoot.typeId !== "[tuple]" || normalizedRoot.arguments.length !== 2) return false
+	const first = normalizedRoot.arguments[0]
+	if (!first || first.kind !== "call" || first.typeId !== inferTypeId) return false
 	const inferType = types.get(inferTypeId)
 	if (!inferType || inferType.kind !== "infer") return false
 	const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(inferType.id)
@@ -328,11 +341,11 @@ function collectInvalidMonadicTypeParameterOrder(
 		if (libertyMonadDeclarationIds.has(declarationType.id)) continue
 		const args = declarationType.arguments ?? []
 		if (args.length <= 1) continue
-		const lastArgType = types.get(args[args.length - 1]!.typeId)
-		const lastTypeParameterPosition = lastArgType?.position
+		const firstArgType = types.get(args[0]!.typeId)
+		const firstTypeParameterPosition = firstArgType?.position
 
 		for (const [idx, arg] of args.entries()) {
-			if (idx === args.length - 1) continue
+			if (idx === 0) continue
 			const argType = types.get(arg.typeId)
 			if (!argType) continue
 			const declarationId = typeIdToDeclarationId.get(argType.id) ?? argType.id
@@ -353,9 +366,9 @@ function collectInvalidMonadicTypeParameterOrder(
 			violations.push({
 				declarationId: declarationType.id,
 				kind: "monad.invalidGenericArgumentConstraint",
-				message: "Only monad-compatible type parameters may appear in the last generic parameter slot.",
+				message: "Only monad-compatible type parameters may appear in the first generic parameter slot.",
 				position: typeParameterConstraintDiagnosticPosition(owners, tpCalls, argType.id, argType.position),
-				...(lastTypeParameterPosition ? { relatedPosition: lastTypeParameterPosition } : {}),
+				...(firstTypeParameterPosition ? { relatedPosition: firstTypeParameterPosition } : {}),
 			})
 		}
 	}
@@ -448,7 +461,7 @@ function collectMonadProducerDeclarations(
 				declarationId: declaration.id,
 				kind: "monad.invalidProducerReturn",
 				message:
-					"Types that accept monad-compatible parameters must return either a 2-item tuple whose second element is monad-like (for example `[result, Stream]` or `infer Rest extends <monad-like>` in that slot), or a direct call to another producer type that satisfies the same contract.",
+					"Types that accept monad-compatible parameters must return either a 2-item tuple whose first element is monad-like (for example `[Stream, result]` or `infer Rest extends <monad-like>` in that slot), or a direct call to another producer type that satisfies the same contract.",
 				position: scope.position,
 			})
 		}
@@ -464,15 +477,11 @@ function declarationAcceptsMonadParam(
 	typeIdToDeclarationId: Map<string, string>,
 ): boolean {
 	const args = declaration.arguments ?? []
-	for (const arg of args) {
-		const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(arg.typeId)
-		if (!extendsTypeId) continue
-		const extendsDeclarationId = typeIdToDeclarationId.get(extendsTypeId) ?? extendsTypeId
-		if (monadCompatibleTypeIds.has(extendsTypeId) || monadCompatibleTypeIds.has(extendsDeclarationId)) {
-			return true
-		}
-	}
-	return false
+	if (args.length === 0) return false
+	const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(args[0]!.typeId)
+	if (!extendsTypeId) return false
+	const extendsDeclarationId = typeIdToDeclarationId.get(extendsTypeId) ?? extendsTypeId
+	return monadCompatibleTypeIds.has(extendsTypeId) || monadCompatibleTypeIds.has(extendsDeclarationId)
 }
 
 function getTerminalReturnCall(scope: Scope): TypeCall | undefined {
@@ -515,7 +524,7 @@ function isValidProducerTerminalReturn(
 	}
 	if (root.typeId.startsWith("[") || root.arguments.length === 0) return false
 	const calleeDeclarationId = typeIdToDeclarationId.get(root.typeId) ?? root.typeId
-	// CLI-configured private producer: assumed to satisfy the same contract as `[result, <monad-like>]`.
+	// CLI-configured private producer: assumed to satisfy the same contract as `[<monad-like>, result]`.
 	if (libertyMonadDeclarationIds.has(calleeDeclarationId)) return true
 	return validProducers.has(calleeDeclarationId)
 }
@@ -529,16 +538,18 @@ function isTupleProducerReturn(
 	resolvedSimpleExtendsByParsedTypeId: Map<string, string>,
 ): boolean {
 	if (call.kind !== "call") return false
-	if (call.typeId !== PSEUDO_TUPLE || call.arguments.length !== 2) return false
-	const second = call.arguments[1]
-	if (!second || second.kind !== "call" || second.typeId.startsWith("[") || second.arguments.length > 0) return false
-	const secondType = types.get(second.typeId)
-	if (secondType?.kind === "infer") {
-		const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(second.typeId)
+	const normalizedCall = unwrapReadonlyTupleRoot(call)
+	if (normalizedCall.kind !== "call") return false
+	if (normalizedCall.typeId !== "[tuple]" || normalizedCall.arguments.length !== 2) return false
+	const first = normalizedCall.arguments[0]
+	if (!first || first.kind !== "call" || first.typeId.startsWith("[") || first.arguments.length > 0) return false
+	const firstType = types.get(first.typeId)
+	if (firstType?.kind === "infer") {
+		const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(first.typeId)
 		if (!extendsTypeId) return false
 		return typeIdRefersToMonadLike(extendsTypeId, monadCompatibleTypeIds, typeIdToDeclarationId, monads)
 	}
-	return typeIdRefersToMonadLike(second.typeId, monadCompatibleTypeIds, typeIdToDeclarationId, monads)
+	return typeIdRefersToMonadLike(first.typeId, monadCompatibleTypeIds, typeIdToDeclarationId, monads)
 }
 
 function collectInvalidProducerInvocations(
@@ -579,7 +590,7 @@ function collectInvalidProducerInvocations(
 }
 
 function walkProducerInvocations(
-	call: TypeCall,
+	call: TypeCall | ScopeRef,
 	declarationId: string,
 	allowRootProducerCall: boolean,
 	scopes: Map<string, Scope>,
@@ -672,7 +683,7 @@ function walkProducerInvocations(
 				declarationId,
 				kind: "monad.invalidProducerInvocation",
 				message:
-					"Producer types (declarations whose last generic parameter is monad-compatible) may only be invoked as a direct terminal return value, or as the immediate `extends` check type in the form `Producer<…> extends [infer …, infer … extends <monad-like>]` (do not wrap the producer in a tuple such as `[Producer<…>] extends …`). Do not nest the producer in other expressions.",
+					"Producer types (declarations whose first generic parameter is monad-compatible) may only be invoked as a direct terminal return value, or as the immediate `extends` check type in the form `Producer<…> extends [infer … extends <monad-like>, infer …]` (do not wrap the producer in a tuple such as `[Producer<…>] extends …`). Do not nest the producer in other expressions.",
 				position: call.position,
 			})
 		}
@@ -706,12 +717,18 @@ function isValidProducerConditionalPattern(
 	if (checkRoot.kind !== "call" || checkRoot.typeId.startsWith("[") || checkRoot.arguments.length === 0) {
 		return false
 	}
-	if (extendsRoot.kind !== "call" || extendsRoot.typeId !== PSEUDO_TUPLE || extendsRoot.arguments.length !== 2) {
+	if (extendsRoot.kind !== "call") return false
+	const normalizedExtends = unwrapReadonlyTupleRoot(extendsRoot)
+	if (
+		normalizedExtends.kind !== "call" ||
+		normalizedExtends.typeId !== "[tuple]" ||
+		normalizedExtends.arguments.length !== 2
+	) {
 		return false
 	}
-	const second = extendsRoot.arguments[1]
-	if (!second || second.kind !== "call") return false
-	const inferType = types.get(second.typeId)
+	const first = normalizedExtends.arguments[0]
+	if (!first || first.kind !== "call") return false
+	const inferType = types.get(first.typeId)
 	if (!inferType || inferType.kind !== "infer") return false
 	const extendsTypeId = resolvedSimpleExtendsByParsedTypeId.get(inferType.id)
 	if (!extendsTypeId) return false
@@ -907,7 +924,7 @@ function typeIdRefersToMonadLike(
 }
 
 function monadLikeLeafReference(
-	arg: TypeCall,
+	arg: TypeCall | ScopeRef,
 	monadCompatibleTypeIds: Set<string>,
 	typeIdToDeclarationId: Map<string, string>,
 	monads: Set<string>,
@@ -922,7 +939,7 @@ function monadLikeLeafReference(
 	return undefined
 }
 
-function calleeLastTypeParameterReferencePosition(
+function calleeFirstTypeParameterReferencePosition(
 	calleeDecl: ParsedType,
 	types: Map<string, ParsedType>,
 	scopes: Map<string, Scope>,
@@ -930,11 +947,11 @@ function calleeLastTypeParameterReferencePosition(
 ): Position | undefined {
 	const args = calleeDecl.arguments
 	if (!args?.length) return undefined
-	const lastTp = types.get(args[args.length - 1]!.typeId)
-	if (!lastTp || lastTp.kind !== "typeParameter") return undefined
-	const tpCalls = scopes.get(lastTp.scopeId)?.calls ?? []
-	const owners = constraintCallOwnerByScopeId.get(lastTp.scopeId)
-	return typeParameterConstraintDiagnosticPosition(owners, tpCalls, lastTp.id, lastTp.position)
+	const firstTp = types.get(args[0]!.typeId)
+	if (!firstTp || firstTp.kind !== "typeParameter") return undefined
+	const tpCalls = scopes.get(firstTp.scopeId)?.calls ?? []
+	const owners = constraintCallOwnerByScopeId.get(firstTp.scopeId)
+	return typeParameterConstraintDiagnosticPosition(owners, tpCalls, firstTp.id, firstTp.position)
 }
 
 function inspectGenericInstantiationCalleeSlots(
@@ -962,7 +979,7 @@ function inspectGenericInstantiationCalleeSlots(
 	if (!declarationType) return
 	if (libertyMonadDeclarationIds.has(declarationType.id)) return
 
-	const relatedPosition = calleeLastTypeParameterReferencePosition(
+	const relatedPosition = calleeFirstTypeParameterReferencePosition(
 		calleeDecl,
 		types,
 		scopes,
@@ -997,7 +1014,7 @@ function inspectGenericInstantiationCalleeSlots(
 }
 
 function walkGenericCalleeConformance(
-	c: TypeCall,
+	c: TypeCall | ScopeRef,
 	declarationScopeId: string,
 	violations: MonadViolation[],
 	types: Map<string, ParsedType>,
@@ -1115,9 +1132,14 @@ function walkGenericCalleeConformance(
 		return
 	}
 
-	if (c.typeId === PSEUDO_TUPLE && c.arguments.length === 2) {
+	const normalizedTuple = unwrapReadonlyTupleRoot(c)
+	if (
+		normalizedTuple.kind === "call" &&
+		normalizedTuple.typeId === "[tuple]" &&
+		normalizedTuple.arguments.length === 2
+	) {
 		walkGenericCalleeConformance(
-			c.arguments[0]!,
+			normalizedTuple.arguments[0]!,
 			declarationScopeId,
 			violations,
 			types,
@@ -1131,7 +1153,7 @@ function walkGenericCalleeConformance(
 			libertyMonadDeclarationIds,
 		)
 		walkGenericCalleeConformance(
-			c.arguments[1]!,
+			normalizedTuple.arguments[1]!,
 			declarationScopeId,
 			violations,
 			types,
@@ -1296,9 +1318,9 @@ type MonadUsageContext = {
 	declarationId: string
 	declarationAcceptsMonad: boolean
 	atTerminalRoot: boolean
-	allowTupleSecondReturn: boolean
-	allowGenericLastArg: boolean
-	allowGenericLastArgMonadBound: boolean
+	allowTupleFirstReturn: boolean
+	allowGenericFirstArg: boolean
+	allowGenericFirstArgMonadBound: boolean
 }
 
 function collectInvalidMonadUsages(
@@ -1335,9 +1357,9 @@ function collectInvalidMonadUsages(
 						declarationId: declaration.id,
 						declarationAcceptsMonad,
 						atTerminalRoot: terminalScopeIds.has(declScope.id),
-						allowTupleSecondReturn: false,
-						allowGenericLastArg: false,
-						allowGenericLastArgMonadBound: false,
+						allowTupleFirstReturn: false,
+						allowGenericFirstArg: false,
+						allowGenericFirstArgMonadBound: false,
 					},
 					parsed.scopes,
 					types,
@@ -1354,7 +1376,7 @@ function collectInvalidMonadUsages(
 }
 
 function walkMonadUsageConstraints(
-	c: TypeCall,
+	c: TypeCall | ScopeRef,
 	context: MonadUsageContext,
 	scopes: Map<string, Scope>,
 	types: Map<string, ParsedType>,
@@ -1378,9 +1400,9 @@ function walkMonadUsageConstraints(
 				{
 					...context,
 					atTerminalRoot,
-					allowTupleSecondReturn: false,
-					allowGenericLastArg: false,
-					allowGenericLastArgMonadBound: false,
+					allowTupleFirstReturn: false,
+					allowGenericFirstArg: false,
+					allowGenericFirstArgMonadBound: false,
 				},
 				scopes,
 				types,
@@ -1408,26 +1430,35 @@ function walkMonadUsageConstraints(
 			monadCompatibleTypeIds.has(c.typeId) ||
 			monadCompatibleTypeIds.has(declarationId)
 		if (!isMonadLeaf) return
-		const allowedAsGenericLast = context.allowGenericLastArg && context.allowGenericLastArgMonadBound
-		const allowedAsTupleSecondReturn = context.allowTupleSecondReturn
+		const allowedAsGenericFirst = context.allowGenericFirstArg && context.allowGenericFirstArgMonadBound
+		const allowedAsTupleFirstReturn = context.allowTupleFirstReturn
 		const allowedAsConstructorSingleReturn = context.atTerminalRoot && !context.declarationAcceptsMonad
-		if (allowedAsGenericLast || allowedAsTupleSecondReturn || allowedAsConstructorSingleReturn) return
+		if (allowedAsGenericFirst || allowedAsTupleFirstReturn || allowedAsConstructorSingleReturn) return
 		violations.push({
 			declarationId: context.declarationId,
 			kind: "monad.invalidMonadUsage",
 			message:
-				"Monadic or monad-like types may only be used as: the last generic argument of a callee whose last parameter has a monad-compatible bound; the second element of a returned two-tuple from a producer; or the sole direct return from a declaration that does not take monad-compatible input.",
+				"Monadic or monad-like types may only be used as: the first generic argument of a callee whose first parameter has a monad-compatible bound; the first element of a returned two-tuple from a producer; or the sole direct return from a declaration that does not take monad-compatible input.",
 			position: c.position,
 		})
 		return
 	}
 
-	if (c.typeId === PSEUDO_TUPLE && c.arguments.length === 2) {
-		const [a0, a1] = c.arguments
+	const normalizedTuple = unwrapReadonlyTupleRoot(c)
+	if (
+		normalizedTuple.kind === "call" &&
+		normalizedTuple.typeId === "[tuple]" &&
+		normalizedTuple.arguments.length === 2
+	) {
+		const [a0, a1] = normalizedTuple.arguments
 		if (a0) {
 			walkMonadUsageConstraints(
 				a0,
-				{ ...context, atTerminalRoot: false, allowTupleSecondReturn: false },
+				{
+					...context,
+					atTerminalRoot: false,
+					allowTupleFirstReturn: context.atTerminalRoot && context.declarationAcceptsMonad,
+				},
 				scopes,
 				types,
 				monads,
@@ -1441,11 +1472,7 @@ function walkMonadUsageConstraints(
 		if (a1) {
 			walkMonadUsageConstraints(
 				a1,
-				{
-					...context,
-					atTerminalRoot: false,
-					allowTupleSecondReturn: context.atTerminalRoot && context.declarationAcceptsMonad,
-				},
+				{ ...context, atTerminalRoot: false, allowTupleFirstReturn: false },
 				scopes,
 				types,
 				monads,
@@ -1461,11 +1488,11 @@ function walkMonadUsageConstraints(
 
 	if (!c.typeId.startsWith("[") && c.arguments.length > 0) {
 		const callee = getResolvedGenericDeclaration(c.typeId, types, typeIdToDeclarationId)
-		const lastIndex = c.arguments.length - 1
-		let lastParamMonadBound = false
-		if (callee?.arguments?.length === c.arguments.length && callee.arguments[lastIndex]) {
-			lastParamMonadBound = calleeTypeParamExtendsMonadCompatible(
-				callee.arguments[lastIndex]!.typeId,
+		const firstIndex = 0
+		let firstParamMonadBound = false
+		if (callee?.arguments?.length === c.arguments.length && callee.arguments[firstIndex]) {
+			firstParamMonadBound = calleeTypeParamExtendsMonadCompatible(
+				callee.arguments[firstIndex]!.typeId,
 				resolvedSimpleExtendsByParsedTypeId,
 				monadCompatibleTypeIds,
 				typeIdToDeclarationId,
@@ -1477,9 +1504,9 @@ function walkMonadUsageConstraints(
 				{
 					...context,
 					atTerminalRoot: false,
-					allowTupleSecondReturn: false,
-					allowGenericLastArg: i === lastIndex,
-					allowGenericLastArgMonadBound: i === lastIndex && lastParamMonadBound,
+					allowTupleFirstReturn: false,
+					allowGenericFirstArg: i === firstIndex,
+					allowGenericFirstArgMonadBound: i === firstIndex && firstParamMonadBound,
 				},
 				scopes,
 				types,
@@ -1497,7 +1524,7 @@ function walkMonadUsageConstraints(
 	for (const a of c.arguments) {
 		walkMonadUsageConstraints(
 			a,
-			{ ...context, atTerminalRoot: false, allowTupleSecondReturn: false },
+			{ ...context, atTerminalRoot: false, allowTupleFirstReturn: false },
 			scopes,
 			types,
 			monads,
@@ -1656,7 +1683,7 @@ function getMonadReturnRepresentative(
 /** Type ids referenced under a `TypeCall` tree (aligned with former `Scope.references` / intrinsic `global:` ids). */
 function collectMonadRelevantTypeIds(roots: TypeCall[]): Set<string> {
 	const out = new Set<string>()
-	const walk = (c: TypeCall): void => {
+	const walk = (c: TypeCall | ScopeRef): void => {
 		if (c.kind !== "call") return
 		if (!c.typeId.startsWith("[")) out.add(c.typeId)
 		for (const a of c.arguments) walk(a)
@@ -1672,7 +1699,7 @@ function getDirectTerminalTypeId(scope: Scope, types: Map<string, ParsedType>): 
 	if (!outer || outer.kind !== "call") return undefined
 
 	let inner: TypeCall = outer
-	if (outer.typeId === PSEUDO_TUPLE && outer.arguments.length === 1) {
+	if (outer.typeId === "[tuple]" && outer.arguments.length === 1) {
 		const only = outer.arguments[0]
 		if (!only || only.kind !== "call") return undefined
 		if (types.get(only.typeId)?.kind !== "typeParameter") inner = outer
@@ -1686,10 +1713,7 @@ function getDirectTerminalTypeId(scope: Scope, types: Map<string, ParsedType>): 
 		// Declaration scopes span the full `type X = …;` statement; the type expression
 		// node often ends before the final `;`, so require containment rather than an
 		// exact end match (same for leading `export` / trivia on the statement).
-		if (
-			outer.position.start < scope.position.start ||
-			outer.position.end > scope.position.end
-		) {
+		if (outer.position.start < scope.position.start || outer.position.end > scope.position.end) {
 			return undefined
 		}
 		return tid
@@ -1813,7 +1837,7 @@ function terminalReturnIsMonadLikeOrNever(
 }
 
 function buildLibertyMonadDeclarationIds(
-	specs: readonly MonadTypePairOption[],
+	specs: readonly MonadTypeOption[],
 	nameToType: Map<string, Map<string, ParsedType>>,
 	typeIdToDeclarationId: Map<string, string>,
 ): Set<string> {
@@ -1827,12 +1851,12 @@ function buildLibertyMonadDeclarationIds(
 			throw new Error(`Monad public type is not a declaration: ${spec.path} ${spec.name}`)
 		}
 
-		const privateType = nameToType.get(spec.path)?.get(spec.privateName)
+		const privateType = nameToType.get(spec.path)?.get(spec.consumerName)
 		if (!privateType) {
-			throw new Error(`Monad private type not found: ${spec.path} ${spec.privateName}`)
+			throw new Error(`Monad private type not found: ${spec.path} ${spec.consumerName}`)
 		}
 		if (privateType.kind !== "typeAlias" && privateType.kind !== "interface" && privateType.kind !== "class") {
-			throw new Error(`Monad private type is not a declaration: ${spec.path} ${spec.privateName}`)
+			throw new Error(`Monad private type is not a declaration: ${spec.path} ${spec.consumerName}`)
 		}
 
 		out.add(typeIdToDeclarationId.get(privateType.id) ?? privateType.id)
@@ -1842,13 +1866,13 @@ function buildLibertyMonadDeclarationIds(
 
 function addInitialMonads(
 	monads: Set<string>,
-	monadTypes: readonly MonadTypePairOption[],
+	monadTypes: readonly MonadTypeOption[],
 	nameToType: Map<string, Map<string, ParsedType>>,
 	typeIdToDeclarationId: Map<string, string>,
 ) {
 	for (const spec of monadTypes) {
 		const publicType = nameToType.get(spec.path)?.get(spec.name)
-		const privateType = nameToType.get(spec.path)?.get(spec.privateName)
+		const privateType = nameToType.get(spec.path)?.get(spec.consumerName)
 		if (!publicType || !privateType) continue
 
 		for (const t of [publicType, privateType]) {
@@ -1996,7 +2020,7 @@ function addInferSimpleExtendsMaps(
 	const inferIds = new Set([...types.values()].filter(t => t.kind === "infer").map(t => t.id))
 	if (inferIds.size === 0) return
 
-	const visit = (c: TypeCall): void => {
+	const visit = (c: TypeCall | ScopeRef): void => {
 		if (c.kind !== "call") return
 		if (inferIds.has(c.typeId) && c.arguments[0]) {
 			const inner = c.arguments[0]

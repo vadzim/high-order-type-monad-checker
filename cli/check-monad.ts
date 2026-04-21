@@ -2,7 +2,7 @@
 
 import path from "node:path"
 import { getMonadViolations } from "../src/monadChecker.ts"
-import type { MonadTypePairOption, MonadViolationsOptions } from "../src/monadCheckerTypes.ts"
+import type { MonadTypeOption, MonadViolationsOptions } from "../src/monadCheckerTypes.ts"
 import { readTypesFromFiles } from "./read-types-from-files.ts"
 import { formatViolation } from "./format-violation.ts"
 import type { FormatSourceSnippetOptions } from "./format-source-snippet.ts"
@@ -34,7 +34,7 @@ Repeatable options:
   --monad <file> <type-name>:<type-private-name>
       Public monad brand plus a paired private declaration. No diagnostics are reported
       for code inside the private declaration. For producer rules elsewhere it is treated
-      like a return of \`[result, Monad]\` (including direct calls to that private producer).
+      like a return of \`[Monad, result]\` (including direct calls to that private producer).
 
 Resolves files with fast-glob, runs readTypes per file, then reports
 getMonadViolations() for each provided monad type identity.
@@ -93,7 +93,7 @@ try {
 
 function parseCli(argv: string[]): ParsedCli {
 	const globs: string[] = []
-	const monadSpecs: MonadTypePairOption[] = []
+	const monadSpecs: MonadTypeOption[] = []
 	let options: FormatSourceSnippetOptions = { contextBefore: 4, contextAfter: 0 }
 
 	let i = 0
@@ -110,29 +110,23 @@ function parseCli(argv: string[]): ParsedCli {
 		}
 		if (token === "--monad") {
 			const file = argv[i + 1]
-			const typePair = argv[i + 2]
-			if (!file || !typePair) {
+			const monadInfo = argv[i + 2]
+			if (!file || !monadInfo) {
 				throw new EInvalidOption("Usage: --monad <file> <type-name>:<type-private-name>")
 			}
-			const colonIdx = typePair.indexOf(":")
-			if (colonIdx <= 0 || colonIdx === typePair.length - 1) {
+			const colonIdx = monadInfo.split(":")
+			if (monadInfo.length !== 4) {
 				throw new EInvalidOption(
-					"Invalid --monad type pair. Expected <type-name>:<type-private-name> (private name is required).",
+					"Invalid --monad type pair. Expected <type-name>:<constructor-name>:<reader-name>:<consumer-name>.",
 				)
 			}
-			const publicName = typePair.slice(0, colonIdx)
-			const privateName = typePair.slice(colonIdx + 1)
-			if (!publicName || !privateName || privateName.includes(":")) {
-				throw new EInvalidOption(
-					"Invalid --monad type pair. Expected <type-name>:<type-private-name> (private name is required).",
-				)
-			}
-			if (publicName === privateName) {
-				throw new EInvalidOption(
-					"Invalid --monad type pair: <type-name> and <type-private-name> must be different declarations.",
-				)
-			}
-			monadSpecs.push({ path: path.join(file), name: publicName, privateName })
+			monadSpecs.push({
+				path: path.join(file),
+				name: monadInfo[0],
+				constructorName: monadInfo[1],
+				readerName: monadInfo[2],
+				consumerName: monadInfo[3],
+			})
 			i += 3
 			continue
 		}
