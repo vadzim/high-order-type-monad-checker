@@ -18,7 +18,11 @@ export type CGParsedTypeKind = "typeAlias" | "interface" | "class" | "typeParame
 export type CGType = {
 	name: string
 	position: CGPosition
-	arguments: { variable: CGTypeRef; extends: CGCall | null; default: CGCall | null }[]
+	arguments: {
+		variable: CGTypeRef
+		extends: CGCall | null
+		default: CGCall | null
+	}[]
 	body: CGCall | null
 	scope: CGScope
 	kind: CGParsedTypeKind
@@ -44,7 +48,13 @@ export type CGScope = {
 	parent: CGScope | null
 }
 
-export type CGCall = { parent: CGCall | null; type: CGTypeRef; scope: CGScope; arguments: CGCall[] }
+export type CGCall = {
+	parent: CGCall | null
+	type: CGTypeRef
+	scope: CGScope
+	arguments: CGCall[]
+	position: CGPosition
+}
 
 export type ContentGraph = {
 	refs: Set<CGTypeRef>
@@ -105,6 +115,16 @@ class ContentGraphBuilder {
 
 	private createPosition(node: ts.Node): CGPosition {
 		return { start: node.getStart(this.sourceFile), end: node.getEnd() }
+	}
+
+	private createPositionByToken(node: ts.Node, token: string): CGPosition {
+		if (!token) return this.createPosition(node)
+		const start = node.getStart(this.sourceFile)
+		const end = node.getEnd()
+		const nodeText = this.sourceFile.text.slice(start, end)
+		const tokenOffset = nodeText.indexOf(token)
+		if (tokenOffset < 0) return this.createPosition(node)
+		return { start: start + tokenOffset, end: start + tokenOffset + token.length }
 	}
 
 	private createScope(
@@ -282,11 +302,18 @@ class ContentGraphBuilder {
 			let extendsCall: CGCall | null = null
 			let defaultCall: CGCall | null = null
 			const globalScope = this.getGlobalScope(scope)
-			if (typeParam.constraint) {
-				const before = this.graph.calls.size
-				this.walkTypeNode(typeParam.constraint, scope, scope.parent ?? scope, globalScope, type, false)
-				extendsCall = this.callsAddedSince(before, scope).at(-1) ?? null
-			}
+			const inferVariableCall = this.addCall(ref, scope, [], typeParam.name)
+			const inferRef = this.getOrCreatePseudoTypeRef("<typeDeclaration>", typeParam, scope)
+			const inferCall = this.addCall(inferRef, scope, [inferVariableCall], typeParam, "infer")
+			extendsCall = this.createExtendsConstraintCall(
+				inferCall,
+				typeParam.constraint,
+				scope,
+				scope.parent ?? scope,
+				globalScope,
+				type,
+				typeParam,
+			)
 			if (typeParam.default) {
 				const before = this.graph.calls.size
 				this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, type, false)
@@ -295,6 +322,29 @@ class ContentGraphBuilder {
 			refs.push({ variable: ref, extends: extendsCall, default: defaultCall })
 		}
 		return refs
+	}
+
+	private createExtendsConstraintCall(
+		leftCall: CGCall | null,
+		constraint: ts.TypeNode | undefined,
+		scope: CGScope,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		anchorNode: ts.Node,
+	): CGCall {
+		const rightCall =
+			constraint === undefined
+				? this.addCall(this.getOrCreateGlobalTypeRef("unknown", anchorNode, globalScope), scope, [], anchorNode)
+				: this.walkTypeNode(constraint, scope, declarationScope, globalScope, ownerType, false)
+		const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", anchorNode, scope)
+		return this.addCall(
+			extendsRef,
+			scope,
+			[leftCall, rightCall].filter((c): c is CGCall => c !== null),
+			anchorNode,
+			"extends",
+		)
 	}
 
 	private resolveTypeReference(name: string, scope: CGScope): CGTypeRef | null {
@@ -320,11 +370,23 @@ class ContentGraphBuilder {
 
 	private getOrCreatePseudoTypeRef(name: string, node: ts.Node, scope: CGScope): CGTypeRef {
 		const rootScope = this.getRootScope(scope)
-		const existing = this.resolveTypeReference(name, rootScope)
-		if (existing) return existing
-		this.createType(name, node, rootScope, "typeAlias")
-		const pseudoRef = this.resolveTypeReference(name, rootScope)
+		let pseudoRef = this.resolveTypeReference(name, rootScope)
+		if (!pseudoRef) {
+			this.createType(name, node, rootScope, "typeAlias")
+			pseudoRef = this.resolveTypeReference(name, rootScope)
+		}
 		if (!pseudoRef) throw new Error(`Failed to create pseudo type ref for ${name}`)
+		if (name === "<extends>" && pseudoRef.ref.arguments.length === 0) {
+			const left = this.createType("left", node, rootScope, "typeParameter")
+			const right = this.createType("right", node, rootScope, "typeParameter")
+			const leftRef = [...rootScope.types].find(r => r.ref === left && r.name === "left")
+			const rightRef = [...rootScope.types].find(r => r.ref === right && r.name === "right")
+			if (!leftRef || !rightRef) throw new Error("Failed to create <extends> pseudo arguments")
+			pseudoRef.ref.arguments = [
+				{ variable: leftRef, extends: null, default: null },
+				{ variable: rightRef, extends: null, default: null },
+			]
+		}
 		return pseudoRef
 	}
 
@@ -337,8 +399,22 @@ class ContentGraphBuilder {
 		return globalRef
 	}
 
-	private addCall(typeRef: CGTypeRef, scope: CGScope, argumentsCalls: CGCall[]): CGCall {
-		const call: CGCall = { parent: null, type: typeRef, scope, arguments: argumentsCalls }
+	private addCall(
+		typeRef: CGTypeRef,
+		scope: CGScope,
+		argumentsCalls: CGCall[],
+		positionNode: ts.Node,
+		positionToken?: string,
+	): CGCall {
+		const call: CGCall = {
+			parent: null,
+			type: typeRef,
+			scope,
+			arguments: argumentsCalls,
+			position: positionToken
+				? this.createPositionByToken(positionNode, positionToken)
+				: this.createPosition(positionNode),
+		}
 		for (const arg of argumentsCalls) arg.parent = call
 		this.graph.calls.add(call)
 		return call
@@ -389,10 +465,11 @@ class ContentGraphBuilder {
 		ownerType: CGType,
 		isReturn: boolean,
 		argumentsCalls: CGCall[],
+		positionToken?: string,
 	): CGCall {
 		const ref = this.getOrCreatePseudoTypeRef(name, node, scope)
 		if (isReturn) ownerType.returns.add(ref)
-		return this.addCall(ref, scope, argumentsCalls)
+		return this.addCall(ref, scope, argumentsCalls, node, positionToken)
 	}
 
 	private addDeclarationRootCall(
@@ -433,23 +510,24 @@ class ContentGraphBuilder {
 					const argRef =
 						this.resolveTypeReference(arg.typeName.text, scope) ??
 						this.getOrCreateGlobalTypeRef(arg.typeName.text, arg.typeName, globalScope)
-					argCalls.push(this.addCall(argRef, scope, []))
+					argCalls.push(this.addCall(argRef, scope, [], arg.typeName))
 				}
 				this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
 			}
-			return this.addCall(ref, scope, argCalls)
+			return this.addCall(ref, scope, argCalls, nameNode)
 		}
 		const intrinsicName = this.intrinsicPseudoName(node)
 		if (intrinsicName) {
 			const ref = this.getOrCreateGlobalTypeRef(intrinsicName, node, globalScope)
 			if (isReturn) ownerType.returns.add(ref)
-			return this.addCall(ref, scope, [])
+			return this.addCall(ref, scope, [], node, intrinsicName)
 		}
 		const literalName = this.literalPseudoName(node)
 		if (literalName) {
 			const ref = this.getOrCreateGlobalTypeRef(literalName, node, globalScope)
 			if (isReturn) ownerType.returns.add(ref)
-			return this.addCall(ref, scope, [])
+			const literalToken = ts.isLiteralTypeNode(node) ? node.literal.getText(this.sourceFile) : undefined
+			return this.addCall(ref, scope, [], node, literalToken)
 		}
 		if (ts.isTupleTypeNode(node)) {
 			const tupleRef = this.getOrCreatePseudoTypeRef("<tuple>", node, scope)
@@ -460,7 +538,7 @@ class ContentGraphBuilder {
 					const root = this.walkTypeNode(element, scope, declarationScope, globalScope, ownerType, false)
 					if (root) roots.push(root)
 				}
-			return this.addCall(tupleRef, scope, roots)
+			return this.addCall(tupleRef, scope, roots, node, "[")
 		}
 		if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
 			const roots: CGCall[] = []
@@ -475,15 +553,24 @@ class ContentGraphBuilder {
 				ownerType,
 				isReturn,
 				roots,
+				ts.isUnionTypeNode(node) ? "|" : "&",
 			)
 		}
 		if (ts.isArrayTypeNode(node)) {
 			const root = this.walkTypeNode(node.elementType, scope, declarationScope, globalScope, ownerType, isReturn)
-			return this.addSyntaxPseudoCall("<array>", node, scope, ownerType, isReturn, root ? [root] : [])
+			return this.addSyntaxPseudoCall("<array>", node, scope, ownerType, isReturn, root ? [root] : [], "[")
 		}
 		if (ts.isParenthesizedTypeNode(node)) {
 			const root = this.walkTypeNode(node.type, scope, declarationScope, globalScope, ownerType, isReturn)
-			return this.addSyntaxPseudoCall("<parenthesized>", node, scope, ownerType, isReturn, root ? [root] : [])
+			return this.addSyntaxPseudoCall(
+				"<parenthesized>",
+				node,
+				scope,
+				ownerType,
+				isReturn,
+				root ? [root] : [],
+				"(",
+			)
 		}
 		if (ts.isTypeOperatorNode(node)) {
 			const roots: CGCall[] = []
@@ -493,7 +580,8 @@ class ContentGraphBuilder {
 					if (root) roots.push(root)
 				}
 			})
-			return this.addSyntaxPseudoCall("<typeOperator>", node, scope, ownerType, isReturn, roots)
+			const operatorToken = ts.tokenToString(node.operator) ?? "typeof"
+			return this.addSyntaxPseudoCall("<typeOperator>", node, scope, ownerType, isReturn, roots, operatorToken)
 		}
 		if (ts.isIndexedAccessTypeNode(node)) {
 			const roots: CGCall[] = []
@@ -508,7 +596,7 @@ class ContentGraphBuilder {
 			if (objectRoot) roots.push(objectRoot)
 			const indexRoot = this.walkTypeNode(node.indexType, scope, declarationScope, globalScope, ownerType, false)
 			if (indexRoot) roots.push(indexRoot)
-			return this.addSyntaxPseudoCall("<indexedAccess>", node, scope, ownerType, isReturn, roots)
+			return this.addSyntaxPseudoCall("<indexedAccess>", node, scope, ownerType, isReturn, roots, "[")
 		}
 		if (ts.isTypeLiteralNode(node)) {
 			const pairRoots: CGCall[] = []
@@ -521,7 +609,7 @@ class ContentGraphBuilder {
 				) {
 					const keyName = `<${JSON.stringify(ts.isIdentifier(member.name) ? member.name.text : member.name.text)}>`
 					const keyRef = this.getOrCreatePseudoTypeRef(keyName, member.name, scope)
-					const keyCall = this.addCall(keyRef, scope, [])
+					const keyCall = this.addCall(keyRef, scope, [], member.name)
 					const valueRoot = this.walkTypeNode(
 						member.type,
 						scope,
@@ -530,10 +618,15 @@ class ContentGraphBuilder {
 						ownerType,
 						false,
 					)
-					const pairCall = this.addSyntaxPseudoCall("<pair>", member.type, scope, ownerType, false, [
-						keyCall,
-						...(valueRoot ? [valueRoot] : []),
-					])
+					const pairCall = this.addSyntaxPseudoCall(
+						"<pair>",
+						member.type,
+						scope,
+						ownerType,
+						false,
+						[keyCall, ...(valueRoot ? [valueRoot] : [])],
+						":",
+					)
 					pairRoots.push(pairCall)
 					continue
 				}
@@ -542,7 +635,7 @@ class ContentGraphBuilder {
 					if (root) pairRoots.push(root)
 				}
 			}
-			return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots)
+			return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots, "{")
 		}
 		if (ts.isConditionalTypeNode(node)) {
 			const conditionalScope = this.createScope("conditional", scope.path, node, scope)
@@ -567,6 +660,8 @@ class ContentGraphBuilder {
 				extendsRef,
 				conditionalScope,
 				[checkRoot, extendsTypeRoot].filter((c): c is CGCall => c !== null),
+				node,
+				"extends",
 			)
 			const trueScope = this.createScope("branchTrue", conditionalScope.path, node.trueType, conditionalScope)
 			const trueCallsBefore = this.graph.calls.size
@@ -582,6 +677,8 @@ class ContentGraphBuilder {
 				conditionalRef,
 				scope,
 				[extendsCall, trueRoot, falseRoot].filter((c): c is CGCall => c !== null),
+				node,
+				"extends",
 			)
 		}
 		if (ts.isInferTypeNode(node)) {
@@ -591,23 +688,27 @@ class ContentGraphBuilder {
 				declarationScope,
 				"infer",
 			)
-			const before = this.graph.calls.size
-			if (node.typeParameter.constraint)
-				this.walkTypeNode(
-					node.typeParameter.constraint,
-					declarationScope,
-					declarationScope,
-					globalScope,
-					ownerType,
-					false,
-				)
-			return this.addSyntaxPseudoCall(
-				"<infer>",
+			const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope)
+			const inferVariableCall = inferredRef
+				? this.addCall(inferredRef, declarationScope, [], node.typeParameter.name)
+				: null
+			const inferCall = this.addSyntaxPseudoCall(
+				"<typeDeclaration>",
 				node,
 				declarationScope,
 				ownerType,
 				false,
-				this.callsAddedSince(before, declarationScope),
+				inferVariableCall ? [inferVariableCall] : [],
+				"infer",
+			)
+			return this.createExtendsConstraintCall(
+				inferCall,
+				node.typeParameter.constraint,
+				declarationScope,
+				declarationScope,
+				globalScope,
+				ownerType,
+				node,
 			)
 		}
 		const fallbackArgs: CGCall[] = []

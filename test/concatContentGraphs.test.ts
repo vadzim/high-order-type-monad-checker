@@ -137,7 +137,40 @@ test("concatContentGraphs: preserves type parameter metadata when target is rewr
 	assert.equal(yType!.arguments.length, 1)
 	assert.ok(yType!.arguments[0]!.extends)
 	assert.ok(yType!.arguments[0]!.default)
-	assert.equal(yType!.arguments[0]!.extends!.type.ref.scope.path, "/tmp/x")
+	assert.equal(yType!.arguments[0]!.extends!.type.name, "<extends>")
+	assert.equal(yType!.arguments[0]!.extends!.arguments.length, 2)
+	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments.length, 1)
+	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments[0]!.type.name, "T")
+	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.path, "/tmp/x")
 	assert.equal(yType!.arguments[0]!.default!.type.ref.scope.path, "/tmp/x")
-	assert.equal(yType!.arguments[0]!.extends!.type.ref.scope.parent?.kind, "global")
+	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.parent?.kind, "global")
+})
+
+test("concatContentGraphs: preserves implicit unknown extends metadata", () => {
+	const consumerGraph = buildContentGraph(
+		"/tmp/file.ts",
+		"import type { X } from './x'; type Y<T = X> = T extends [infer U] ? U : T;",
+	)
+	const sourceGraph = buildContentGraph("/tmp/x", "export type X = string;")
+	const merged = validateContracts(concatContentGraphs([consumerGraph, sourceGraph]))
+
+	const yType = [...merged.types].find(type => type.name === "Y" && type.scope.path === "/tmp/file.ts")
+	assert.ok(yType)
+	assert.equal(yType!.arguments.length, 1)
+	assert.ok(yType!.arguments[0]!.extends)
+	assert.equal(yType!.arguments[0]!.extends!.type.name, "<extends>")
+	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.name, "unknown")
+	assert.ok(yType!.arguments[0]!.default)
+	assert.equal(yType!.arguments[0]!.default!.type.ref.scope.path, "/tmp/x")
+
+	const inferExtendsCall = [...merged.calls].find(
+		call =>
+			call.scope.path === "/tmp/file.ts" &&
+			call.type.name === "<extends>" &&
+			call.arguments[0]?.type.name === "<typeDeclaration>" &&
+			call.arguments[0]?.arguments[0]?.type.name === "U",
+	)
+	assert.ok(inferExtendsCall)
+	assert.equal(inferExtendsCall!.arguments[1]!.type.name, "unknown")
 })

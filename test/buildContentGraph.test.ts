@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { buildContentGraph, type ContentGraph } from "../src/buildContentGraph.ts"
-import { inspect } from "../src/utils.ts"
+// import { inspect } from "../src/utils.ts"
 
 test("buildContentTreeFromSource: declared types use self refs and alias returns", () => {
 	const graph = validateContracts(
@@ -11,7 +11,7 @@ test("buildContentTreeFromSource: declared types use self refs and alias returns
 		),
 	)
 
-	console.log(inspect(graph, { colors: true }))
+	// console.log(inspect(graph, { colors: true }))
 	// console.log(inspect({ ...graph, scopes: [...graph.scopes], calls: undefined, refs: undefined }, { colors: true }))
 	// function getDecls(scope: CGScope | null | undefined): string[][] {
 	// 	if (!scope) return []
@@ -56,8 +56,8 @@ test("buildContentTreeFromSource: declared types use self refs and alias returns
 
 	assert.equal(aType.called.size, 1)
 	assert.equal(bType.called.size, 0)
-	assert.equal(xType.called.size, 2)
-	assert.equal(yType.called.size, 1)
+	assert.equal(xType.called.size, 3)
+	assert.equal(yType.called.size, 2)
 	assert.equal(cType.called.size, 1)
 
 	assert.equal(aType.body!.type.name, "<conditional>")
@@ -237,6 +237,34 @@ test("buildContentTreeFromSource: forward file-local refs resolve after declarat
 	assert.equal(bType!.body!.type.ref, aType)
 	assert.equal(bType!.body!.type.name, "A")
 	assert.equal(bType!.body!.type.ref.scope.kind, "file")
+})
+
+test("buildContentTreeFromSource: unconstrained type and infer params normalize to extends unknown", () => {
+	const graph = validateContracts(
+		buildContentGraph("/tmp/file.ts", "type A<B> = B extends [infer C] ? C : never;"),
+	)
+	const aType = [...graph.types].find(t => t.name === "A" && t.scope.path === "/tmp/file.ts")
+	assert.ok(aType)
+	assert.equal(aType!.arguments.length, 1)
+
+	const typeArgument = aType!.arguments[0]
+	assert.ok(typeArgument)
+	assert.ok(typeArgument!.extends)
+	assert.equal(typeArgument!.extends!.type.name, "<extends>")
+	assert.equal(typeArgument!.extends!.arguments.length, 2)
+	assert.equal(typeArgument!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[0]!.type.name, "B")
+	assert.equal(typeArgument!.extends!.arguments[1]!.type.name, "unknown")
+
+	const inferExtendsCall = [...graph.calls].find(
+		call =>
+			call.type.name === "<extends>" &&
+			call.arguments[0]?.type.name === "<typeDeclaration>" &&
+			call.arguments[0]?.arguments[0]?.type.name === "C",
+	)
+	assert.ok(inferExtendsCall)
+	assert.equal(inferExtendsCall!.arguments.length, 2)
+	assert.equal(inferExtendsCall!.arguments[1]!.type.name, "unknown")
 })
 
 export function validateContracts(graph: ContentGraph) {

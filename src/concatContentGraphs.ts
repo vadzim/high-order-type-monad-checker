@@ -4,13 +4,14 @@ function typeKey(path: string, name: string): string {
 	return `${path}::${name}`
 }
 
-export function concatContentGraphs(graphs: ContentGraph[]): ContentGraph {
+export function concatContentGraphs(input: Iterable<ContentGraph>): ContentGraph {
 	const out: ContentGraph = {
 		refs: new Set(),
 		types: new Set(),
 		scopes: new Set(),
 		calls: new Set(),
 	}
+	const graphs = Array.from(input)
 	if (graphs.length === 0) return out
 
 	const globalScope: CGScope = {
@@ -106,6 +107,7 @@ export function concatContentGraphs(graphs: ContentGraph[]): ContentGraph {
 				type: refMap.get(call.type)!,
 				scope: scopeMap.get(call.scope)!,
 				arguments: [],
+				position: call.position,
 			}
 			callMap.set(call, clonedCall)
 			out.calls.add(clonedCall)
