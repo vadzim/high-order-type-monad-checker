@@ -90,16 +90,16 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	const callToType = new Map(graph.types.values().flatMap(t => allCallsForType(t).map(c => [c, t])))
 
-	const isReturned = (call: CGCall) => returns(callToType.get(call)?.body).some(c => c === call)
+	const isReturned = (call: CGCall) => returns(body(callToType.get(call) ?? null)).some(c => c === call)
 
 	const monads = new Set(walk(initialMonads, m => m.returnedBy.values().map(t => t.ref)))
 
 	// if a type returns a monad, it should always return a monad
 
 	for (const monad of monads.difference(initialMonads)) {
-		for (const ret of returns(monad.body ?? never())) {
+		for (const ret of returns(body(monad) ?? never())) {
 			if (!monads.has(ret.type.ref) && ret.type.name !== "never") {
-				const returningMonad = returns(monad.body ?? never()).find(r => monads.has(r.type.ref)) ?? never()
+				const returningMonad = returns(body(monad) ?? never()).find(r => monads.has(r.type.ref)) ?? never()
 				violations.push({
 					kind: "monad.incompatibleTypes",
 					message: `Incompatible types. Returning type ${ret.type.name} is not a monad`,
@@ -115,7 +115,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	const rootTypes = new Set(graph.types.values().filter(t => t.kind === "typeAlias"))
 
-	const aliases = new Set(rootTypes.values().filter(t => t.arguments.length === 0))
+	const aliases = new Set(rootTypes.values().filter(t => parametersCount(t) === 0))
 
 	for (const monad of monads) {
 		for (const call of usages(monad)) {
@@ -149,7 +149,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					const type = callToType.get(call)
 					const isReader = type === monadReader
 					const isConsumer = type === monadConsumer
-					const isInReturningTuple = returns(type?.body).some(
+					const isInReturningTuple = returns(body(type ?? null)).some(
 						c => c.type.name === "<tuple>" && c.arguments[0] === call,
 					)
 
@@ -199,7 +199,7 @@ function* returns(body: CGCall | null | undefined): Generator<CGCall> {
 	}
 }
 
-function* allCalls(c: CGCall | null): Generator<CGCall> {
+function* allCalls(c: CGCall | null | undefined): Generator<CGCall> {
 	if (c) {
 		yield c
 		yield* c.arguments.values().flatMap(allCalls)
@@ -207,15 +207,31 @@ function* allCalls(c: CGCall | null): Generator<CGCall> {
 }
 
 function* allCallsForType(type: CGType): Generator<CGCall> {
-	yield* allCalls(type.body)
-	for (const arg of type.arguments) {
-		yield* allCalls(arg.extends)
-		yield* allCalls(arg.default)
-	}
+	yield* allCalls(type.declaration?.parent)
 }
 
 function isInRightSideOfExtends(call: CGCall): boolean {
 	const pr = [call, ...parents(call)]
 	const ei = pr.findIndex(p => p.type.name === "<extends>")
 	return ei >= 0 && pr[ei].arguments[1] === pr[ei - 1]
+}
+
+function body(type: CGType | null | undefined): CGCall | undefined | null {
+	return type?.declaration?.parent?.arguments[1] ?? type?.body
+}
+
+function extend(type: CGType): CGCall | undefined | null {
+	return type.declaration?.parent?.parent?.arguments[1]
+}
+
+function parameter(type: CGType, index: number = 0): CGCall | undefined {
+	return type.declaration?.parent?.arguments[index + 2]
+}
+
+function parameters(type: CGType): IteratorObject<CGCall> {
+	return (type.declaration?.parent?.arguments ?? []).values().drop(2)
+}
+
+function parametersCount(type: CGType): number {
+	return (type.declaration?.parent?.arguments ?? []).length - 2
 }

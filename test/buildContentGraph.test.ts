@@ -44,8 +44,10 @@ test("buildContentTreeFromSource: declared types use self refs and alias returns
 
 	assert.ok(aType.body)
 	assert.ok(bType.body)
-	assert.ok(!xType.body)
-	assert.ok(!yType.body)
+	assert.ok(aType.declaration)
+	assert.ok(bType.declaration)
+	assert.ok(xType.body)
+	assert.ok(yType.body)
 	assert.ok(!cType.body)
 
 	assert.equal(aType.refs.size, 1)
@@ -62,6 +64,13 @@ test("buildContentTreeFromSource: declared types use self refs and alias returns
 
 	assert.equal(aType.body!.type.name, "<conditional>")
 	assert.equal(bType.body!.type.name, "A")
+	assert.equal(aType.declaration!.type.name, "A")
+	assert.equal(aType.declaration!.arguments.length, 0)
+	assert.equal(aType.declaration!.parent?.type.name, "<typeDeclaration>")
+	assert.equal(aType.declaration!.parent?.arguments[0], aType.declaration)
+	assert.equal(bType.declaration!.type.name, "B")
+	assert.equal(xType.body!.type.name, "unknown")
+	assert.equal(yType.body!.type.name, "<1>")
 
 	const bDeclRef = [...bType!.scope.types].find(r => r.ref === bType)
 	assert.ok(bDeclRef)
@@ -217,7 +226,8 @@ test("buildContentTreeFromSource: type alias declaration root carries self ref, 
 		buildContentGraph("/tmp/file.ts", "type X<T extends string> = { a: string; b: [number] } | (boolean);"),
 	)
 	const declCall = [...graph.calls].find(
-		c => c.type.name === "<typeDeclaration>" && c.scope.path === "/tmp/file.ts" && c.arguments[0]?.type.name === "X",
+		c =>
+			c.type.name === "<typeDeclaration>" && c.scope.path === "/tmp/file.ts" && c.arguments[0]?.type.name === "X",
 	)
 	assert.ok(declCall)
 	assert.equal(declCall!.arguments.length, 3)
@@ -246,9 +256,7 @@ test("buildContentTreeFromSource: forward file-local refs resolve after declarat
 })
 
 test("buildContentTreeFromSource: unconstrained type and infer params normalize to extends unknown", () => {
-	const graph = validateContracts(
-		buildContentGraph("/tmp/file.ts", "type A<B> = B extends [infer C] ? C : never;"),
-	)
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type A<B> = B extends [infer C] ? C : never;"))
 	const aType = [...graph.types].find(t => t.name === "A" && t.scope.path === "/tmp/file.ts")
 	assert.ok(aType)
 	assert.equal(aType!.arguments.length, 1)
@@ -262,6 +270,7 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	assert.equal(typeArgument!.extends!.arguments[0]!.arguments.length, 2)
 	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[0]!.type.name, "B")
 	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[1]!.type.name, "unknown")
+	assert.equal(typeArgument!.variable.ref.declaration, typeArgument!.extends!.arguments[0]!.arguments[0])
 	assert.equal(typeArgument!.extends!.arguments[1]!.type.name, "unknown")
 
 	const inferExtendsCall = [...graph.calls].find(
@@ -303,6 +312,16 @@ export function validateContracts(graph: ContentGraph) {
 			assert.ok(arg.parent === call)
 		}
 		assert.ok(call.parent?.arguments.includes(call) ?? true)
+	}
+
+	for (const type of graph.types) {
+		if (type.declaration || type.body) {
+			assert.equal(type.declaration?.arguments.length, 0)
+			assert.ok(type.declaration.parent)
+			assert.equal(type.declaration.parent!.type.name, "<typeDeclaration>")
+			assert.equal(type.declaration.parent!.arguments[0], type.declaration)
+			assert.equal(type.declaration.parent!.arguments[1], type.body)
+		}
 	}
 
 	return graph

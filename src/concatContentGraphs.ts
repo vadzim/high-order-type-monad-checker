@@ -59,6 +59,7 @@ export function concatContentGraphs(input: Iterable<ContentGraph>): ContentGraph
 				name: type.name,
 				position: { ...type.position },
 				arguments: [],
+				declaration: null,
 				body: null,
 				scope: scopeMap.get(type.scope)!,
 				kind: type.kind,
@@ -131,6 +132,7 @@ export function concatContentGraphs(input: Iterable<ContentGraph>): ContentGraph
 				extends: arg.extends ? callMap.get(arg.extends)! : null,
 				default: arg.default ? callMap.get(arg.default)! : null,
 			}))
+			clonedType.declaration = type.declaration ? callMap.get(type.declaration)! : null
 			clonedType.body = type.body ? callMap.get(type.body)! : null
 			clonedType.called = new Set([...type.called].map(call => callMap.get(call)!))
 			clonedType.returnedBy = new Set([...type.returnedBy].map(ref => refMap.get(ref)!))
@@ -178,6 +180,7 @@ export function concatContentGraphs(input: Iterable<ContentGraph>): ContentGraph
 			for (const ref of fromType.returnedBy) toType.returnedBy.add(ref)
 			for (const ref of fromType.returns) toType.returns.add(ref)
 			for (const ref of fromType.refs) toType.refs.add(ref)
+			if (toType.declaration === null && fromType.declaration !== null) toType.declaration = fromType.declaration
 			if (toType.body === null && fromType.body !== null) toType.body = fromType.body
 			if (toType.arguments.length === 0 && fromType.arguments.length > 0) toType.arguments = fromType.arguments
 		}

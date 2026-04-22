@@ -23,6 +23,7 @@ export type CGType = {
 		extends: CGCall | null
 		default: CGCall | null
 	}[]
+	declaration: CGCall | null
 	body: CGCall | null
 	scope: CGScope
 	kind: CGParsedTypeKind
@@ -151,6 +152,7 @@ class ContentGraphBuilder {
 			name,
 			position: isSyntheticScope ? { start: 0, end: 0 } : this.createPosition(node),
 			arguments: [],
+			declaration: null,
 			body: null,
 			scope,
 			kind,
@@ -310,7 +312,15 @@ class ContentGraphBuilder {
 			const declarationBodyCall =
 				defaultCall ??
 				this.addCall(this.getOrCreateGlobalTypeRef("unknown", typeParam, globalScope), scope, [], typeParam)
-			const declarationCall = this.addTypeDeclarationCall(ref, declarationBodyCall, scope, typeParam, [], "infer")
+			const declarationCall = this.addTypeDeclarationCall(
+				type,
+				ref,
+				declarationBodyCall,
+				scope,
+				typeParam,
+				[],
+				"infer",
+			)
 			extendsCall = this.createExtendsConstraintCall(
 				declarationCall,
 				typeParam.constraint,
@@ -474,6 +484,7 @@ class ContentGraphBuilder {
 	}
 
 	private addTypeDeclarationCall(
+		ownerType: CGType,
 		declarationRef: CGTypeRef,
 		bodyCall: CGCall,
 		scope: CGScope,
@@ -482,6 +493,8 @@ class ContentGraphBuilder {
 		positionToken?: string,
 	): CGCall {
 		const declarationVariableCall = this.addCall(declarationRef, scope, [], node)
+		ownerType.declaration = declarationVariableCall
+		ownerType.body = bodyCall
 		const declarationTypeRef = this.getOrCreatePseudoTypeRef("<typeDeclaration>", node, scope)
 		return this.addCall(
 			declarationTypeRef,
@@ -500,9 +513,12 @@ class ContentGraphBuilder {
 	): CGCall | null {
 		if (bodyRoots.length === 0) return null
 		if (ownerType.kind === "typeAlias") {
-			const declarationRef = [...ownerType.scope.types].find(r => r.ref === ownerType && r.name === ownerType.name)
+			const declarationRef = [...ownerType.scope.types].find(
+				r => r.ref === ownerType && r.name === ownerType.name,
+			)
 			if (!declarationRef) throw new Error(`Failed to find declaration ref for ${ownerType.name}`)
 			return this.addTypeDeclarationCall(
+				ownerType,
 				declarationRef,
 				bodyRoots.at(-1)!,
 				declScope,
@@ -510,7 +526,14 @@ class ContentGraphBuilder {
 				ownerType.arguments.map(argument => argument.extends).filter((call): call is CGCall => call !== null),
 			)
 		}
-		return this.addSyntaxPseudoCall("<declaration>", declNode as ts.TypeNode, declScope, ownerType, false, bodyRoots)
+		return this.addSyntaxPseudoCall(
+			"<declaration>",
+			declNode as ts.TypeNode,
+			declScope,
+			ownerType,
+			false,
+			bodyRoots,
+		)
 	}
 
 	private walkTypeNode(
@@ -715,6 +738,7 @@ class ContentGraphBuilder {
 			const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope)
 			const inferCall = inferredRef
 				? this.addTypeDeclarationCall(
+						inferredRef.ref,
 						inferredRef,
 						this.addCall(
 							this.getOrCreateGlobalTypeRef("unknown", node, globalScope),
