@@ -4,6 +4,7 @@ import { buildContentGraph } from "../src/buildContentGraph.ts"
 import { concatContentGraphs } from "../src/concatContentGraphs.ts"
 import assert from "node:assert"
 import { never } from "../src/utils.ts"
+import { validateContracts } from "./buildContentGraph.test.ts"
 
 test("checkMonad basic", async (t: import("node:test").TestContext) => {
 	const files = new Map([
@@ -31,7 +32,11 @@ import { Monad } from "./monad.ts"
 		],
 	])
 
-	const graph = concatContentGraphs(files.entries().map(([path, content]) => buildContentGraph(path, content)))
+	const graph = validateContracts(
+		concatContentGraphs(
+			files.entries().map(([path, content]) => validateContracts(buildContentGraph(path, content))),
+		),
+	)
 
 	const monadDecls = Array.from(graph.types.values().find(t => t.name === "Monad")?.called ?? []).filter(
 		c => c.parent?.type.name !== "<typeDeclaration>",

@@ -616,11 +616,8 @@ class ContentGraphBuilder {
 		if (isReturn) ownerType.returns.add(ref)
 		const argCalls: CGCall[] = []
 		for (const arg of node.typeArguments ?? []) {
-			if (ts.isTypeReferenceNode(arg) && ts.isIdentifier(arg.typeName)) {
-				const argRef = this.resolveNamedTypeReference(arg.typeName.text, arg.typeName, scope, globalScope)
-				argCalls.push(this.addCall(argRef, scope, [], arg.typeName))
-			}
-			this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
+			const root = this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
+			if (root) argCalls.push(root)
 		}
 		return this.addCall(ref, scope, argCalls, nameNode)
 	}

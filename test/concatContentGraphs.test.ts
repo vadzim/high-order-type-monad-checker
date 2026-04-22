@@ -13,8 +13,8 @@ test("concatContentGraphs: handles empty input", () => {
 })
 
 test("concatContentGraphs: merges into one global scope", () => {
-	const graph1 = buildContentGraph("/tmp/a.ts", "type A = string;")
-	const graph2 = buildContentGraph("/tmp/b.ts", "type B = number;")
+	const graph1 = validateContracts(buildContentGraph("/tmp/a.ts", "type A = string;"))
+	const graph2 = validateContracts(buildContentGraph("/tmp/b.ts", "type B = number;"))
 	const merged = validateContracts(concatContentGraphs([graph1, graph2]))
 
 	const globalScopes = [...merged.scopes].filter(scope => scope.kind === "global")
@@ -30,8 +30,10 @@ test("concatContentGraphs: merges into one global scope", () => {
 })
 
 test("concatContentGraphs: rewires imported stubs to concrete source type", () => {
-	const consumerGraph = buildContentGraph("/tmp/file.ts", "import type { X as LocalX } from './x'; type Y = LocalX;")
-	const sourceGraph = buildContentGraph("/tmp/x", "export type X = string;")
+	const consumerGraph = validateContracts(
+		buildContentGraph("/tmp/file.ts", "import type { X as LocalX } from './x'; type Y = LocalX;"),
+	)
+	const sourceGraph = validateContracts(buildContentGraph("/tmp/x", "export type X = string;"))
 	const merged = validateContracts(concatContentGraphs([consumerGraph, sourceGraph]))
 
 	const yType = [...merged.types].find(type => type.name === "Y" && type.scope.path === "/tmp/file.ts")
@@ -63,8 +65,10 @@ test("concatContentGraphs: rewires imported stubs to concrete source type", () =
 })
 
 test("concatContentGraphs: does not mutate source graphs", () => {
-	const consumerGraph = buildContentGraph("/tmp/file.ts", "import type { X as LocalX } from './x'; type Y = LocalX;")
-	const sourceGraph = buildContentGraph("/tmp/x", "export type X = string;")
+	const consumerGraph = validateContracts(
+		buildContentGraph("/tmp/file.ts", "import type { X as LocalX } from './x'; type Y = LocalX;"),
+	)
+	const sourceGraph = validateContracts(buildContentGraph("/tmp/x", "export type X = string;"))
 
 	const consumerStubBefore = [...consumerGraph.types].find(type => type.name === "X" && type.scope.path === "/tmp/x")
 	assert.ok(consumerStubBefore)
@@ -80,8 +84,12 @@ test("concatContentGraphs: does not mutate source graphs", () => {
 })
 
 test("concatContentGraphs: keeps one merged stub when source is missing", () => {
-	const graph1 = buildContentGraph("/tmp/a.ts", "import type { X as ALocalX } from './x'; type A = ALocalX;")
-	const graph2 = buildContentGraph("/tmp/b.ts", "import type { X as BLocalX } from './x'; type B = BLocalX;")
+	const graph1 = validateContracts(
+		buildContentGraph("/tmp/a.ts", "import type { X as ALocalX } from './x'; type A = ALocalX;"),
+	)
+	const graph2 = validateContracts(
+		buildContentGraph("/tmp/b.ts", "import type { X as BLocalX } from './x'; type B = BLocalX;"),
+	)
 	const merged = validateContracts(concatContentGraphs([graph1, graph2]))
 
 	const xTypes = [...merged.types].filter(type => type.name === "X" && type.scope.path === "/tmp/x")
@@ -102,9 +110,15 @@ test("concatContentGraphs: keeps one merged stub when source is missing", () => 
 })
 
 test("concatContentGraphs: dedupes identical missing imports across many graphs", () => {
-	const g1 = buildContentGraph("/tmp/a.ts", "import type { X as ALocalX } from './x'; type A = ALocalX;")
-	const g2 = buildContentGraph("/tmp/b.ts", "import type { X as BLocalX } from './x'; type B = BLocalX;")
-	const g3 = buildContentGraph("/tmp/c.ts", "import type { X as CLocalX } from './x'; type C = CLocalX;")
+	const g1 = validateContracts(
+		buildContentGraph("/tmp/a.ts", "import type { X as ALocalX } from './x'; type A = ALocalX;"),
+	)
+	const g2 = validateContracts(
+		buildContentGraph("/tmp/b.ts", "import type { X as BLocalX } from './x'; type B = BLocalX;"),
+	)
+	const g3 = validateContracts(
+		buildContentGraph("/tmp/c.ts", "import type { X as CLocalX } from './x'; type C = CLocalX;"),
+	)
 	const merged = validateContracts(concatContentGraphs([g1, g2, g3]))
 
 	const xTypes = [...merged.types].filter(type => type.name === "X" && type.scope.path === "/tmp/x")
@@ -125,11 +139,10 @@ test("concatContentGraphs: dedupes identical missing imports across many graphs"
 })
 
 test("concatContentGraphs: preserves type parameter metadata when target is rewritten", () => {
-	const consumerGraph = buildContentGraph(
-		"/tmp/file.ts",
-		"import type { X } from './x'; type Y<T extends X = X> = T;",
+	const consumerGraph = validateContracts(
+		buildContentGraph("/tmp/file.ts", "import type { X } from './x'; type Y<T extends X = X> = T;"),
 	)
-	const sourceGraph = buildContentGraph("/tmp/x", "export type X = string;")
+	const sourceGraph = validateContracts(buildContentGraph("/tmp/x", "export type X = string;"))
 	const merged = validateContracts(concatContentGraphs([consumerGraph, sourceGraph]))
 
 	const yType = [...merged.types].find(type => type.name === "Y" && type.scope.path === "/tmp/file.ts")
@@ -165,11 +178,10 @@ test("concatContentGraphs: preserves type parameter metadata when target is rewr
 })
 
 test("concatContentGraphs: preserves implicit unknown extends metadata", () => {
-	const consumerGraph = buildContentGraph(
-		"/tmp/file.ts",
-		"import type { X } from './x'; type Y<T = X> = T extends [infer U] ? U : T;",
+	const consumerGraph = validateContracts(
+		buildContentGraph("/tmp/file.ts", "import type { X } from './x'; type Y<T = X> = T extends [infer U] ? U : T;"),
 	)
-	const sourceGraph = buildContentGraph("/tmp/x", "export type X = string;")
+	const sourceGraph = validateContracts(buildContentGraph("/tmp/x", "export type X = string;"))
 	const merged = validateContracts(concatContentGraphs([consumerGraph, sourceGraph]))
 
 	const yType = [...merged.types].find(type => type.name === "Y" && type.scope.path === "/tmp/file.ts")

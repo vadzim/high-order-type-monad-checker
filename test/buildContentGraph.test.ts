@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { buildContentGraph, type ContentGraph } from "../src/buildContentGraph.ts"
+import { buildContentGraph, type CGCall, type ContentGraph } from "../src/buildContentGraph.ts"
 // import { inspect } from "../src/utils.ts"
 
 test("buildContentTreeFromSource: declared types use self refs and alias returns", () => {
@@ -340,5 +340,24 @@ export function validateContracts(graph: ContentGraph) {
 		}
 	}
 
+	const declarationCalls = new Set(
+		graph.types
+			.values()
+			.map(t => t.declaration?.parent)
+			.flatMap(walkCalls),
+	)
+
+	const typesCalled = new Set(graph.types.values().flatMap(t => t.called))
+
+	assert.ok(typesCalled.isSubsetOf(declarationCalls))
+
 	return graph
+}
+
+function* walkCalls(call: CGCall | null | undefined): Generator<CGCall> {
+	if (!call) return
+	yield call
+	for (const arg of call.arguments) {
+		yield* walkCalls(arg)
+	}
 }
