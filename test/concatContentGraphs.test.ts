@@ -140,8 +140,9 @@ test("concatContentGraphs: preserves type parameter metadata when target is rewr
 	assert.equal(yType!.arguments[0]!.extends!.type.name, "<extends>")
 	assert.equal(yType!.arguments[0]!.extends!.arguments.length, 2)
 	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments.length, 1)
+	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments.length, 2)
 	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments[0]!.type.name, "T")
+	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments[1]!.type.ref.scope.path, "/tmp/x")
 	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.path, "/tmp/x")
 	assert.equal(yType!.arguments[0]!.default!.type.ref.scope.path, "/tmp/x")
 	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.parent?.kind, "global")
@@ -172,5 +173,7 @@ test("concatContentGraphs: preserves implicit unknown extends metadata", () => {
 			call.arguments[0]?.arguments[0]?.type.name === "U",
 	)
 	assert.ok(inferExtendsCall)
+	assert.equal(inferExtendsCall!.arguments[0]!.arguments.length, 2)
+	assert.equal(inferExtendsCall!.arguments[0]!.arguments[1]!.type.name, "unknown")
 	assert.equal(inferExtendsCall!.arguments[1]!.type.name, "unknown")
 })

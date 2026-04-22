@@ -54,8 +54,8 @@ test("buildContentTreeFromSource: declared types use self refs and alias returns
 	assert.equal(yType.refs.size, 1)
 	assert.equal(cType.refs.size, 1)
 
-	assert.equal(aType.called.size, 1)
-	assert.equal(bType.called.size, 0)
+	assert.equal(aType.called.size, 2)
+	assert.equal(bType.called.size, 1)
 	assert.equal(xType.called.size, 3)
 	assert.equal(yType.called.size, 2)
 	assert.equal(cType.called.size, 1)
@@ -212,14 +212,20 @@ test("buildContentTreeFromSource: object and pair pseudo calls are emitted", () 
 	assert.equal(pseudoNames.has("<array>"), false)
 })
 
-test("buildContentTreeFromSource: declaration root call connects declaration syntax", () => {
+test("buildContentTreeFromSource: type alias declaration root carries self ref, body, and generic constraints", () => {
 	const graph = validateContracts(
-		buildContentGraph("/tmp/file.ts", "type X = { a: string; b: [number] } | (boolean);"),
+		buildContentGraph("/tmp/file.ts", "type X<T extends string> = { a: string; b: [number] } | (boolean);"),
 	)
-	const declCall = [...graph.calls].find(c => c.type.name === "<declaration>" && c.scope.path === "/tmp/file.ts")
+	const declCall = [...graph.calls].find(
+		c => c.type.name === "<typeDeclaration>" && c.scope.path === "/tmp/file.ts" && c.arguments[0]?.type.name === "X",
+	)
 	assert.ok(declCall)
-	const argNames = new Set(declCall!.arguments.map(c => c.type.name))
-	assert.equal(argNames.has("<union>"), true)
+	assert.equal(declCall!.arguments.length, 3)
+	assert.equal(declCall!.arguments[0]!.arguments.length, 0)
+	assert.equal(declCall!.arguments[1]!.type.name, "<union>")
+	assert.equal(declCall!.arguments[2]!.type.name, "<extends>")
+	assert.equal(declCall!.arguments[2]!.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(declCall!.arguments[2]!.arguments[1]!.type.name, "string")
 })
 
 test("buildContentTreeFromSource: forward file-local refs resolve after declaration pass", () => {
@@ -253,7 +259,9 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	assert.equal(typeArgument!.extends!.type.name, "<extends>")
 	assert.equal(typeArgument!.extends!.arguments.length, 2)
 	assert.equal(typeArgument!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(typeArgument!.extends!.arguments[0]!.arguments.length, 2)
 	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[0]!.type.name, "B")
+	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[1]!.type.name, "unknown")
 	assert.equal(typeArgument!.extends!.arguments[1]!.type.name, "unknown")
 
 	const inferExtendsCall = [...graph.calls].find(
@@ -264,6 +272,8 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	)
 	assert.ok(inferExtendsCall)
 	assert.equal(inferExtendsCall!.arguments.length, 2)
+	assert.equal(inferExtendsCall!.arguments[0]!.arguments.length, 2)
+	assert.equal(inferExtendsCall!.arguments[0]!.arguments[1]!.type.name, "unknown")
 	assert.equal(inferExtendsCall!.arguments[1]!.type.name, "unknown")
 })
 

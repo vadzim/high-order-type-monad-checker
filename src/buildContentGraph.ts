@@ -302,11 +302,17 @@ class ContentGraphBuilder {
 			let extendsCall: CGCall | null = null
 			let defaultCall: CGCall | null = null
 			const globalScope = this.getGlobalScope(scope)
-			const inferVariableCall = this.addCall(ref, scope, [], typeParam.name)
-			const inferRef = this.getOrCreatePseudoTypeRef("<typeDeclaration>", typeParam, scope)
-			const inferCall = this.addCall(inferRef, scope, [inferVariableCall], typeParam, "infer")
+			if (typeParam.default) {
+				const before = this.graph.calls.size
+				this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, type, false)
+				defaultCall = this.callsAddedSince(before, scope).at(-1) ?? null
+			}
+			const declarationBodyCall =
+				defaultCall ??
+				this.addCall(this.getOrCreateGlobalTypeRef("unknown", typeParam, globalScope), scope, [], typeParam)
+			const declarationCall = this.addTypeDeclarationCall(ref, declarationBodyCall, scope, typeParam, [], "infer")
 			extendsCall = this.createExtendsConstraintCall(
-				inferCall,
+				declarationCall,
 				typeParam.constraint,
 				scope,
 				scope.parent ?? scope,
@@ -314,11 +320,6 @@ class ContentGraphBuilder {
 				type,
 				typeParam,
 			)
-			if (typeParam.default) {
-				const before = this.graph.calls.size
-				this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, type, false)
-				defaultCall = this.callsAddedSince(before, scope).at(-1) ?? null
-			}
 			refs.push({ variable: ref, extends: extendsCall, default: defaultCall })
 		}
 		return refs
@@ -472,6 +473,25 @@ class ContentGraphBuilder {
 		return this.addCall(ref, scope, argumentsCalls, node, positionToken)
 	}
 
+	private addTypeDeclarationCall(
+		declarationRef: CGTypeRef,
+		bodyCall: CGCall,
+		scope: CGScope,
+		node: ts.Node,
+		extraArguments: CGCall[] = [],
+		positionToken?: string,
+	): CGCall {
+		const declarationVariableCall = this.addCall(declarationRef, scope, [], node)
+		const declarationTypeRef = this.getOrCreatePseudoTypeRef("<typeDeclaration>", node, scope)
+		return this.addCall(
+			declarationTypeRef,
+			scope,
+			[declarationVariableCall, bodyCall, ...extraArguments],
+			node,
+			positionToken,
+		)
+	}
+
 	private addDeclarationRootCall(
 		declNode: ts.Node,
 		declScope: CGScope,
@@ -479,14 +499,18 @@ class ContentGraphBuilder {
 		bodyRoots: CGCall[],
 	): CGCall | null {
 		if (bodyRoots.length === 0) return null
-		return this.addSyntaxPseudoCall(
-			"<declaration>",
-			declNode as ts.TypeNode,
-			declScope,
-			ownerType,
-			false,
-			bodyRoots,
-		)
+		if (ownerType.kind === "typeAlias") {
+			const declarationRef = [...ownerType.scope.types].find(r => r.ref === ownerType && r.name === ownerType.name)
+			if (!declarationRef) throw new Error(`Failed to find declaration ref for ${ownerType.name}`)
+			return this.addTypeDeclarationCall(
+				declarationRef,
+				bodyRoots.at(-1)!,
+				declScope,
+				declNode,
+				ownerType.arguments.map(argument => argument.extends).filter((call): call is CGCall => call !== null),
+			)
+		}
+		return this.addSyntaxPseudoCall("<declaration>", declNode as ts.TypeNode, declScope, ownerType, false, bodyRoots)
 	}
 
 	private walkTypeNode(
@@ -689,18 +713,22 @@ class ContentGraphBuilder {
 				"infer",
 			)
 			const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope)
-			const inferVariableCall = inferredRef
-				? this.addCall(inferredRef, declarationScope, [], node.typeParameter.name)
+			const inferCall = inferredRef
+				? this.addTypeDeclarationCall(
+						inferredRef,
+						this.addCall(
+							this.getOrCreateGlobalTypeRef("unknown", node, globalScope),
+							declarationScope,
+							[],
+							node,
+							"unknown",
+						),
+						declarationScope,
+						node,
+						[],
+						"infer",
+					)
 				: null
-			const inferCall = this.addSyntaxPseudoCall(
-				"<typeDeclaration>",
-				node,
-				declarationScope,
-				ownerType,
-				false,
-				inferVariableCall ? [inferVariableCall] : [],
-				"infer",
-			)
 			return this.createExtendsConstraintCall(
 				inferCall,
 				node.typeParameter.constraint,

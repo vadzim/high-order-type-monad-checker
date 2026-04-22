@@ -33,17 +33,15 @@ import { Monad } from "./monad.ts"
 
 	const graph = concatContentGraphs(files.entries().map(([path, content]) => buildContentGraph(path, content)))
 
-	const monadDecls = graph.types.values().find(t => t.name === "Monad")?.called
+	const monadDecls = Array.from(
+		graph.types.values().find(t => t.name === "Monad")?.called ?? [],
+	).filter(c => c.parent?.type.name !== "<typeDeclaration>")
 
-	assert.ok(monadDecls?.values().every(c => c.parent?.type.name === "<extends>" && c.parent?.arguments[1] === c))
+	assert.ok(monadDecls.every(c => c.parent?.type.name === "<extends>" && c.parent?.arguments[1] === c))
 
-	const infers = monadDecls
-		?.values()
-		.map(c => c.parent?.arguments[0])
-		.filter(t => t != null)
-		.toArray()
+	const infers = monadDecls.map(c => c.parent?.arguments[0]).filter(t => t != null)
 
-	assert.ok(infers?.values().every(c => c.type.name === "<typeDeclaration>"))
+	assert.ok(infers.every(c => c.type.name === "<typeDeclaration>"))
 
 	// console.log(infers)
 
