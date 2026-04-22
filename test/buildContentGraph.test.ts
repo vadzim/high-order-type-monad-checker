@@ -264,14 +264,14 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	const typeArgument = aType!.arguments[0]
 	assert.ok(typeArgument)
 	assert.ok(typeArgument!.extends)
-	assert.equal(typeArgument!.extends!.type.name, "<extends>")
-	assert.equal(typeArgument!.extends!.arguments.length, 2)
-	assert.equal(typeArgument!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
-	assert.equal(typeArgument!.extends!.arguments[0]!.arguments.length, 2)
-	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[0]!.type.name, "B")
-	assert.equal(typeArgument!.extends!.arguments[0]!.arguments[1]!.type.name, "unknown")
-	assert.equal(typeArgument!.variable.ref.declaration, typeArgument!.extends!.arguments[0]!.arguments[0])
-	assert.equal(typeArgument!.extends!.arguments[1]!.type.name, "unknown")
+	assert.equal(typeArgument!.extends!.type.name, "unknown")
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.type.name, "<extends>")
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments.length, 2)
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0]!.type.name, "B")
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[1]!.type.name, "unknown")
+	assert.equal(typeArgument!.variable.ref.declaration, typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0])
+	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[1], typeArgument!.extends)
 
 	const inferExtendsCall = [...graph.calls].find(
 		call =>
@@ -319,8 +319,17 @@ export function validateContracts(graph: ContentGraph) {
 			assert.equal(type.declaration?.arguments.length, 0)
 			assert.ok(type.declaration.parent)
 			assert.equal(type.declaration.parent!.type.name, "<typeDeclaration>")
-			assert.equal(type.declaration.parent!.arguments[0], type.declaration)
-			assert.equal(type.declaration.parent!.arguments[1], type.body)
+			assert.ok(type.declaration.parent!.arguments[0] === type.declaration)
+			assert.ok(type.declaration.parent!.arguments[1] === type.body)
+			if (type.kind === "typeAlias") {
+				for (const [index, arg] of type.arguments.entries()) {
+					assert.ok(arg.extends)
+					assert.ok(arg.extends === type.declaration.parent!.arguments[2 + index].arguments[1])
+					assert.ok(arg.variable === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[0].type)
+					assert.ok(arg.variable.ref.body === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[1])
+					assert.ok((arg.default ?? arg.variable.ref.body) === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[1])
+				}
+			}
 		}
 	}
 

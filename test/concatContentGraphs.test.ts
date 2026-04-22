@@ -141,15 +141,18 @@ test("concatContentGraphs: preserves type parameter metadata when target is rewr
 	assert.equal(yType!.declaration!.type.name, "Y")
 	assert.equal(yType!.declaration!.parent?.type.name, "<typeDeclaration>")
 	assert.equal(yType!.declaration!.parent?.arguments[0], yType!.declaration)
-	assert.equal(yType!.arguments[0]!.extends!.type.name, "<extends>")
-	assert.equal(yType!.arguments[0]!.extends!.arguments.length, 2)
-	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.type.name, "<typeDeclaration>")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments.length, 2)
-	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments[0]!.type.name, "T")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[0]!.arguments[1]!.type.ref.scope.path, "/tmp/x")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.path, "/tmp/x")
+	assert.equal(yType!.arguments[0]!.extends!.type.ref.scope.path, "/tmp/x")
+	assert.equal(yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.type.name, "<extends>")
+	assert.equal(yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.arguments[0]!.type.name, "<typeDeclaration>")
+	assert.equal(yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments.length, 2)
+	assert.equal(yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0]!.type.name, "T")
+	assert.equal(
+		yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[1]!.type.ref.scope.path,
+		"/tmp/x",
+	)
+	assert.equal(yType!.arguments[0]!.variable.ref.declaration?.parent?.parent?.arguments[1]!.type.ref.scope.path, "/tmp/x")
 	assert.equal(yType!.arguments[0]!.default!.type.ref.scope.path, "/tmp/x")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.ref.scope.parent?.kind, "global")
+	assert.equal(yType!.arguments[0]!.extends!.type.ref.scope.parent?.kind, "global")
 })
 
 test("concatContentGraphs: preserves implicit unknown extends metadata", () => {
@@ -164,8 +167,7 @@ test("concatContentGraphs: preserves implicit unknown extends metadata", () => {
 	assert.ok(yType)
 	assert.equal(yType!.arguments.length, 1)
 	assert.ok(yType!.arguments[0]!.extends)
-	assert.equal(yType!.arguments[0]!.extends!.type.name, "<extends>")
-	assert.equal(yType!.arguments[0]!.extends!.arguments[1]!.type.name, "unknown")
+	assert.equal(yType!.arguments[0]!.extends!.type.name, "unknown")
 	assert.ok(yType!.arguments[0]!.default)
 	assert.equal(yType!.arguments[0]!.default!.type.ref.scope.path, "/tmp/x")
 

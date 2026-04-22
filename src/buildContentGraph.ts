@@ -330,7 +330,7 @@ class ContentGraphBuilder {
 				type,
 				typeParam,
 			)
-			refs.push({ variable: ref, extends: extendsCall, default: defaultCall })
+			refs.push({ variable: ref, extends: extendsCall.arguments[1] ?? null, default: defaultCall })
 		}
 		return refs
 	}
@@ -523,7 +523,9 @@ class ContentGraphBuilder {
 				bodyRoots.at(-1)!,
 				declScope,
 				declNode,
-				ownerType.arguments.map(argument => argument.extends).filter((call): call is CGCall => call !== null),
+				ownerType.arguments
+					.map(argument => argument.variable.ref.declaration?.parent?.parent)
+					.filter((call): call is CGCall => call?.type.name === "<extends>"),
 			)
 		}
 		return this.addSyntaxPseudoCall(

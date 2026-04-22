@@ -47,11 +47,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	for (const type of graph.types) {
 		for (const [index, arg] of type.arguments.entries()) {
-			if (
-				arg.extends?.type.name === "<extends>" &&
-				arg.extends?.arguments[0].type.name === "<typeDeclaration>" &&
-				arg.extends?.arguments[1].type.ref === monadClass
-			) {
+			if (arg.extends?.type.ref === monadClass) {
 				if (index === 0) {
 					monadReceivers.add(type)
 				} else {
@@ -143,8 +139,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 				// a monad can be passed to a generic type only if that argument is mark as a monad
 				if (
 					call.parent.type.name !== "<extends>" &&
-					(call.parent.type.ref.arguments[0]?.extends?.type.name !== "<extends>" ||
-						call.parent.type.ref.arguments[0]?.extends?.arguments[1].type.ref !== monadClass)
+					call.parent.type.ref.arguments[0]?.extends?.type.ref !== monadClass
 				) {
 					const type = callToType.get(call)
 					const isReader = type === monadReader
