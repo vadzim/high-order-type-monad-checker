@@ -1,115 +1,81 @@
-// import test from "node:test"
-// import assert from "node:assert/strict"
-// import { spawnSync } from "node:child_process"
-// import { mkdtemp, rm, writeFile } from "node:fs/promises"
-// import { tmpdir } from "node:os"
-// import path from "node:path"
+import test from "node:test"
+import assert from "node:assert/strict"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { runCli } from "../cli/check-monad.ts"
 
-// async function withTempFile(source: string, fn: (filePath: string) => void | Promise<void>) {
-// 	const dir = await mkdtemp(path.join(tmpdir(), "monad-checker-cli-"))
-// 	const filePath = path.join(dir, "sample.ts")
-// 	try {
-// 		await writeFile(filePath, source, "utf8")
-// 		await fn(filePath)
-// 	} finally {
-// 		await rm(dir, { recursive: true, force: true })
-// 	}
-// }
+const monadModule = `
+type Monad = { head: string, tail: string }
+type MCreate<Text extends string> =
+	Parse<string> extends [infer Head extends string, infer Tail extends string]
+		? { head: Head, tail: Tail } extends infer Result extends Monad
+			? Result
+			: never
+		: never
+type MRead<M extends Monad> = M["head"]
+type MNext<M extends Monad> = MCreate<M["tail"]>
+`
 
-// function runCli(args: string[]) {
-// 	return spawnSync(process.execPath, ["cli/check-monad.ts", ...args], {
-// 		cwd: path.resolve(process.cwd()),
-// 		encoding: "utf8",
-// 	})
-// }
+async function withTempFile(source: string, fn: (filePath: string) => void | Promise<void>) {
+	const dir = await mkdtemp(path.join(tmpdir(), "monad-checker-cli-"))
+	const filePath = path.join(dir, "sample.ts")
+	try {
+		await writeFile(filePath, source, "utf8")
+		await fn(filePath)
+	} finally {
+		await rm(dir, { recursive: true, force: true })
+	}
+}
 
-// test("cli renders related snippets for each repeated-consume violation", async () => {
-// 	const source = `
-// type O = { __monad: "O" };
-// type C<A extends O> = [A];
-// type X<A extends O> = [C<A>, C<A>, C<A>];
-// `
-// 	await withTempFile(source, filePath => {
-// 		const out = runCli(["--monad", filePath, "O", filePath])
-// 		assert.equal(out.status, 1, out.stderr)
+async function captureCli(args: string[]) {
+	const messages: string[] = []
+	const status = await runCli(args, {
+		error(message) {
+			messages.push(message)
+		},
+	})
+	return { status, stderr: messages.join("\n").replaceAll(/\x1b\[[0-9;]*m/g, "") }
+}
 
-// 		const repeatedMessage = "consumed multiple times in one path."
-// 		const repeatedCount = out.stderr.split(repeatedMessage).length - 1
-// 		const firstUsageCount = out.stderr.split("first consumption occurs here:").length - 1
-// 		assert.ok(repeatedCount >= 1, "Expected at least one repeated-consume diagnostic.")
-// 		assert.equal(
-// 			firstUsageCount,
-// 			repeatedCount,
-// 			"Each repeated-consume diagnostic should include a first-consumption snippet.",
-// 		)
+test("cli exits 0 when the graph has no monad violations", async () => {
+	const source = `${monadModule}
+type Ok<M extends Monad> = [MNext<M>, MRead<M>]
+`
 
-// 		// Ensure snippet markers are rendered for both primary and related snippets.
-// 		assert.match(out.stderr, /\n\s*\|\s*~+/m)
-// 		const cleanedupOutput = out.stderr.replaceAll(/\/tmp\/.*?(\w+?\.ts)/g, "$1")
+	await withTempFile(source, filePath => {
+		return captureCli([filePath, "--monad", filePath, "Monad:MCreate:MRead:MNext"]).then(out => {
+			assert.equal(out.status, 0, out.stderr)
+			assert.match(out.stderr, /Found 0 errors in 1 file\./)
+		})
+	})
+})
 
-// 		assert.equal(
-// 			cleanedupOutput,
-// 			`sample.ts:4:32 - Monad-bound variable 'A' consumed multiple times in one path.
-//  1 |
-//  2 | type O = { __monad: "O" };
-//  3 | type C<A extends O> = [A];
-//  4 | type X<A extends O> = [C<A>, C<A>, C<A>];
-//    |                                ~
+test("cli renders primary and related snippets for repeated branch consumption", async () => {
+	const source = `${monadModule}
+type Pair<X, Y> = [X, Y]
+type Bad<M extends Monad> = Pair<M, M>
+`
 
-//     sample.ts:4:26 - first consumption occurs here:
-//      1 |
-//      2 | type O = { __monad: "O" };
-//      3 | type C<A extends O> = [A];
-//      4 | type X<A extends O> = [C<A>, C<A>, C<A>];
-//        |                          ~
+	await withTempFile(source, filePath => {
+		return captureCli([filePath, "--snippet-lines", "2:1", "--monad", filePath, "Monad:MCreate:MRead:MNext"]).then(
+			out => {
+				assert.equal(out.status, 1, out.stderr)
+				assert.match(
+					out.stderr,
+					/Using monad M here is not allowed, because this branch already consumed it earlier\./,
+				)
+				assert.match(out.stderr, /The same branch already consumed M here/)
+				assert.match(out.stderr, new RegExp(`${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`))
+				assert.match(out.stderr, /\n\s*\|\s*~+/m)
+			},
+		)
+	})
+})
 
-// sample.ts:4:38 - Monad-bound variable 'A' consumed multiple times in one path.
-//  1 |
-//  2 | type O = { __monad: "O" };
-//  3 | type C<A extends O> = [A];
-//  4 | type X<A extends O> = [C<A>, C<A>, C<A>];
-//    |                                      ~
-
-//     sample.ts:4:26 - first consumption occurs here:
-//      1 |
-//      2 | type O = { __monad: "O" };
-//      3 | type C<A extends O> = [A];
-//      4 | type X<A extends O> = [C<A>, C<A>, C<A>];
-//        |                          ~
-
-// Found 2 errors in 1 file.
-// `,
-// 		)
-// 	})
-// })
-
-// test("cli exits 0 when no violations found", async () => {
-// 	const source = `
-// type O = { __monad: "O" };
-// type R<A extends O> = A;
-// type X<A extends O> = R<A>;
-// `
-// 	await withTempFile(source, filePath => {
-// 		const out = runCli(["--monad", filePath, "O", filePath])
-// 		assert.equal(out.status, 0, out.stderr)
-// 		assert.equal(out.stderr.trim(), "Found 0 errors in 1 file.")
-// 	})
-// })
-
-// test("cli renders related declaration snippet for invalid generic constraint", async () => {
-// 	const source = `
-// type O = { __monad: "O" };
-// type G<A> = A;
-// type X<A extends O> = G<A>;
-// `
-// 	await withTempFile(source, filePath => {
-// 		const out = runCli(["--monad", filePath, "O", filePath])
-// 		assert.equal(out.status, 1, out.stderr)
-// 		assert.match(
-// 			out.stderr,
-// 			/Type 'A' is monad \('O'\), so generic 'G' must declare its 1st parameter as 'A extends O'\./,
-// 		)
-// 		assert.match(out.stderr, /\n\s+.*generic declaration:/)
-// 		assert.match(out.stderr, /\n\s*\|\s*~+/m)
-// 	})
-// })
+test("cli --help prints usage and readme", async () => {
+	const out = await captureCli(["--help"])
+	assert.equal(out.status, 0, out.stderr)
+	assert.match(out.stderr, /Usage: node check-monad\.ts \[options\] <glob> \[glob\.\.\.\]/)
+	assert.match(out.stderr, /# monad-checker/)
+})

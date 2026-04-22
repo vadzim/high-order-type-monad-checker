@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
 import path from "node:path"
-import { getMonadViolations } from "../src/monadChecker.ts"
-import type { MonadTypeOption, MonadViolationsOptions } from "../src/monadCheckerTypes.ts"
-import { readTypesFromFiles } from "./read-types-from-files.ts"
-import { formatViolation } from "./format-violation.ts"
+import { pathToFileURL } from "node:url"
+import fg from "fast-glob"
+import { readFile } from "node:fs/promises"
+import { buildContentGraph } from "../src/buildContentGraph.ts"
+import { concatContentGraphs } from "../src/concatContentGraphs.ts"
+import { getMonadViolations, type MonadTypeOption } from "../src/monadChecker2.ts"
+import { formatGraphViolation } from "./format-graph-violation.ts"
 import type { FormatSourceSnippetOptions } from "./format-source-snippet.ts"
-import { buildDeclarationPathById } from "../src/parsed-content-helpers.ts"
 
 // CLI responsibility boundary:
 // - parse argv and read files
-// - delegate semantic decisions to parseTypes + monadChecker
+// - delegate semantic decisions to buildContentGraph + monadChecker2
 // - render checker diagnostics for humans
 
 class EInvalidOption extends Error {}
@@ -18,12 +20,19 @@ class EInvalidOption extends Error {}
 type ParsedCli = {
 	globs: string[]
 	options: FormatSourceSnippetOptions
-	checkerOptions: MonadViolationsOptions
+	monadTypes: MonadTypeOption[]
+}
+
+type CliStreams = {
+	error(message: string): void
 }
 
 const USAGE = `Usage: node check-monad.ts [options] <glob> [glob...]
 
 Options:
+  --help, -h
+      Print CLI usage and the repository README.
+
   --snippet-lines <before>[:<after>]
       Number of lines to render around marker (defaults 4:0).
       <before> counts snippet lines up to marker line (inclusive).
@@ -31,64 +40,77 @@ Options:
       Examples: 7, 7:2, :2.
 
 Repeatable options:
-  --monad <file> <type-name>:<type-private-name>
-      Public monad brand plus a paired private declaration. No diagnostics are reported
-      for code inside the private declaration. For producer rules elsewhere it is treated
-      like a return of \`[Monad, result]\` (including direct calls to that private producer).
+  --monad <file> <type-name>:<constructor-name>:<reader-name>:<consumer-name>
+      Configure the marker monad type and the three primitive operations.
 
-Resolves files with fast-glob, runs readTypes per file, then reports
-getMonadViolations() for each provided monad type identity.
+Resolves files with fast-glob, builds a merged content graph, then reports
+violations for each provided monad configuration.
 
 Options and globs may appear in any order. Exit 1 if any violation, if
 no --monad is provided, if globs are missing, or if no files match.`
 
-try {
-	const cli = parseCli(process.argv.slice(2))
-	if (!cli.checkerOptions.monadTypes?.length) {
-		throw new EInvalidOption("Missing required --monad option.")
-	}
-	if (!cli.globs.length) {
-		throw new EInvalidOption("Missing required glob arguments.")
-	}
-
-	const loaded = await readTypesFromFiles(cli.globs, { idPrefix: "check-monad" })
-	if (loaded.files.size === 0) {
-		throw new EInvalidOption("No files matched the provided globs.")
-	}
-
-	const declarationPathById = buildDeclarationPathById(loaded.parsed)
-
-	let errorCount = 0
-
-	const fileViolations = getMonadViolations(loaded.parsed, cli.checkerOptions)
-	for (const violation of fileViolations) {
-		const formatted = formatViolation(violation, loaded, cli.options)
-		if (formatted) {
-			console.error(formatted)
-			errorCount++
+export async function runCli(argv: string[], streams: CliStreams = { error: message => console.error(message) }) {
+	try {
+		if (argv.includes("--help") || argv.includes("-h")) {
+			streams.error(await renderHelpText())
+			return 0
 		}
+
+		const cli = parseCli(argv)
+		if (!cli.monadTypes.length) {
+			throw new EInvalidOption("Missing required --monad option.")
+		}
+		if (!cli.globs.length) {
+			throw new EInvalidOption("Missing required glob arguments.")
+		}
+
+		const paths = await fg(cli.globs, { onlyFiles: true, unique: true })
+		if (paths.length === 0) {
+			throw new EInvalidOption("No files matched the provided globs.")
+		}
+
+		const files = new Map(
+			await Promise.all(
+				paths.map(async filePath => [filePath, await readFile(filePath, { encoding: "utf8" })] as const),
+			),
+		)
+
+		const graph = concatContentGraphs(
+			files.entries().map(([filePath, content]) => buildContentGraph(filePath, content)),
+		)
+		const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, monadType))
+
+		let errorCount = 0
+		for (const violation of violations) {
+			const formatted = formatGraphViolation(violation, files, cli.options)
+			if (formatted) {
+				streams.error(formatted)
+				errorCount++
+			}
+		}
+
+		const fileCount = files.size
+		const errorLabel = errorCount === 1 ? "error" : "errors"
+		const fileLabel = fileCount === 1 ? "file" : "files"
+		streams.error(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
+
+		return errorCount > 0 ? 1 : 0
+	} catch (error) {
+		if (error instanceof EInvalidOption) {
+			const message = error instanceof Error ? error.message : String(error)
+			streams.error(message)
+			streams.error("")
+			streams.error(USAGE)
+			return 1
+		}
+
+		streams.error(String(error))
+		return 1
 	}
+}
 
-	const fileCount = loaded.files.size
-
-	const errorLabel = errorCount === 1 ? "error" : "errors"
-	const fileLabel = fileCount === 1 ? "file" : "files"
-	console.error(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
-
-	if (errorCount > 0) {
-		process.exitCode = 1
-	}
-} catch (error) {
-	if (error instanceof EInvalidOption) {
-		const message = error instanceof Error ? error.message : String(error)
-		console.error(message)
-		console.error("")
-		console.error(USAGE)
-		process.exit(1)
-	}
-
-	console.error(error)
-	process.exit(1)
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+	process.exitCode = await runCli(process.argv.slice(2))
 }
 
 function parseCli(argv: string[]): ParsedCli {
@@ -112,20 +134,22 @@ function parseCli(argv: string[]): ParsedCli {
 			const file = argv[i + 1]
 			const monadInfo = argv[i + 2]
 			if (!file || !monadInfo) {
-				throw new EInvalidOption("Usage: --monad <file> <type-name>:<type-private-name>")
+				throw new EInvalidOption(
+					"Usage: --monad <file> <type-name>:<constructor-name>:<reader-name>:<consumer-name>",
+				)
 			}
-			const colonIdx = monadInfo.split(":")
-			if (monadInfo.length !== 4) {
+			const parts = monadInfo.split(":")
+			if (parts.length !== 4) {
 				throw new EInvalidOption(
 					"Invalid --monad type pair. Expected <type-name>:<constructor-name>:<reader-name>:<consumer-name>.",
 				)
 			}
 			monadSpecs.push({
 				path: path.join(file),
-				name: monadInfo[0],
-				constructorName: monadInfo[1],
-				readerName: monadInfo[2],
-				consumerName: monadInfo[3],
+				name: parts[0] ?? "",
+				constructorName: parts[1] ?? "",
+				readerName: parts[2] ?? "",
+				consumerName: parts[3] ?? "",
 			})
 			i += 3
 			continue
@@ -140,9 +164,7 @@ function parseCli(argv: string[]): ParsedCli {
 	return {
 		globs,
 		options,
-		checkerOptions: {
-			monadTypes: monadSpecs,
-		},
+		monadTypes: monadSpecs,
 	}
 }
 
@@ -166,4 +188,15 @@ function parseSnippetLines(input: string): {
 function parseNonNegative(raw: string, label: string): number {
 	if (!/^\d+$/.test(raw)) throw new EInvalidOption(`Invalid ${label} '${raw}'. Expected non-negative integer.`)
 	return Number(raw)
+}
+
+async function renderHelpText(): Promise<string> {
+	let readme = ""
+	try {
+		readme = await readFile(new URL("../README.md", import.meta.url), { encoding: "utf8" })
+	} catch {
+		readme = "README.md not found."
+	}
+
+	return `${USAGE}\n\n${readme}`
 }

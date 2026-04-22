@@ -41,134 +41,222 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	const monadReader = monadInfo.get(options.readerName) ?? never("Monad reader not found")
 	const monadConsumer = monadInfo.get(options.consumerName) ?? never("Monad consumer not found")
 
-	const monadReceivers = new Set<CGType>([monadReader, monadConsumer])
+	const callToOwner = new Map(graph.types.values().flatMap(type => allCallsForType(type).map(call => [call, type])))
 
-	// parameter of monadClass can be only the first one
+	const monadValueTypes = new Set<CGType>()
 
 	for (const type of graph.types) {
 		for (const [index, arg] of type.arguments.entries()) {
-			if (arg.extends?.type.ref === monadClass) {
-				if (index === 0) {
-					monadReceivers.add(type)
-				} else {
-					violations.push({
-						kind: "monad.invalidUsage",
-						message: `Monad type ${arg.variable.name} can only be declared as the first parameter`,
-						position: arg.variable.position,
-						path: arg.variable.scope.path,
-					})
-				}
+			if (arg.extends?.type.ref !== monadClass) continue
+			if (index !== 0) {
+				violations.push({
+					kind: "monad.invalidUsage",
+					message: `Using ${arg.variable.name} here as a monad-marked type parameter is not allowed, because only the first generic parameter may extend ${monadClass.name}`,
+					position: arg.variable.position,
+					path: arg.variable.scope.path,
+				})
 			}
+			monadValueTypes.add(arg.variable.ref)
 		}
 	}
 
-	const initialMonads = new Set<CGType>()
-
-	// monadClass can only be used in the right side of extends immediately
-
 	for (const call of usages(monadClass)) {
-		if (
-			call.parent?.type.name !== "<extends>" ||
-			call.parent?.arguments.length !== 2 ||
-			call.parent?.arguments[1] !== call ||
-			call.parent?.arguments[0].type.name !== "<typeDeclaration>"
-		) {
+		if (!isAllowedMonadClassMarkerUse(call)) {
 			violations.push({
 				kind: "monad.invalidUsage",
-				message: `Type ${call.type.name} is a monad type class. It can only be used to declare a monad type using extends`,
+				message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration`,
 				position: call.position,
 				path: call.scope.path,
 			})
-		} else {
-			initialMonads.add(call.parent?.arguments[0]?.arguments[0]?.type.ref ?? never())
+			continue
+		}
+		if (call.parent?.type.name === "<extends>" && call.parent.arguments[1] === call) {
+			monadValueTypes.add(call.parent.arguments[0]!.arguments[0]!.type.ref)
 		}
 	}
 
-	const callToType = new Map(graph.types.values().flatMap(t => allCallsForType(t).map(c => [c, t])))
-
-	const isReturned = (call: CGCall) => returns(body(callToType.get(call) ?? null)).some(c => c === call)
-
-	const monads = new Set(walk(initialMonads, m => m.returnedBy.values().map(t => t.ref)))
-
-	// if a type returns a monad, it should always return a monad
-
-	for (const monad of monads.difference(initialMonads)) {
-		for (const ret of returns(body(monad) ?? never())) {
-			if (!monads.has(ret.type.ref) && ret.type.name !== "never") {
-				const returningMonad = returns(body(monad) ?? never()).find(r => monads.has(r.type.ref)) ?? never()
-				violations.push({
-					kind: "monad.incompatibleTypes",
-					message: `Incompatible types. Returning type ${ret.type.name} is not a monad`,
-					position: ret.position,
-					path: ret.scope.path,
-					relatedMessage: `Though the other return ${returningMonad.type.name} is a monad`,
-					relatedPosition: returningMonad.position,
-					relatedPath: returningMonad.scope.path,
-				})
+	let changed = true
+	while (changed) {
+		changed = false
+		for (const type of graph.types) {
+			if (type.kind !== "typeAlias" || monadValueTypes.has(type)) continue
+			const branches = terminalReturns(type)
+			if (branches.length === 0) continue
+			if (branches.every(call => call.type.name === "never" || monadValueTypes.has(call.type.ref))) {
+				monadValueTypes.add(type)
+				changed = true
 			}
 		}
 	}
 
-	const rootTypes = new Set(graph.types.values().filter(t => t.kind === "typeAlias"))
+	const consumerTypes = new Set<CGType>([monadConsumer])
 
-	const aliases = new Set(rootTypes.values().filter(t => parametersCount(t) === 0))
+	changed = true
+	while (changed) {
+		changed = false
+		for (const type of graph.types) {
+			if (type.kind !== "typeAlias" || consumerTypes.has(type)) continue
+			const branches = terminalReturns(type)
+			if (branches.some(isConsumerReturnShape)) {
+				consumerTypes.add(type)
+				changed = true
+			}
+		}
+	}
 
-	for (const monad of monads) {
-		for (const call of usages(monad)) {
-			// monad cannot be used within extends' right side
-			if (isInRightSideOfExtends(call)) {
+	for (const consumerType of consumerTypes) {
+		if (consumerType === monadConsumer) continue
+		const branches = terminalReturns(consumerType)
+		for (const branch of branches) {
+			if (isAllowedConsumerBranch(branch)) continue
+			violations.push({
+				kind: "monad.incompatibleTypes",
+				message: `This branch of ${consumerType.name} is not allowed, because once a type becomes a consumer every branch must return [monad, result], another consumer call, or never`,
+				position: branch.position,
+				path: branch.scope.path,
+				relatedMessage: `${consumerType.name} becomes a consumer here`,
+				relatedPosition: consumerType.position,
+				relatedPath: consumerType.scope.path,
+			})
+		}
+	}
+
+	for (const consumerType of consumerTypes) {
+		for (const call of usages(consumerType)) {
+			if (isAllowedConsumerInvocation(call)) continue
+			violations.push({
+				kind: "monad.invalidUsage",
+				message: `Using consumer ${consumerType.name} here is not allowed. It must be either the terminal return of another consumer branch, or the immediate left side of extends with a right side like [${monadClass.name}, result]`,
+				position: call.position,
+				path: call.scope.path,
+			})
+		}
+	}
+
+	for (const monadType of monadValueTypes) {
+		for (const call of usages(monadType)) {
+			if (isIgnoredMonadUsage(call)) continue
+			if (!isMonadArgumentUsage(call)) continue
+			if (isAllowedTupleConsumerResultPosition(call)) continue
+			const parent = call.parent
+			if (!parent) continue
+			if (parent.arguments[0] !== call) {
 				violations.push({
 					kind: "monad.invalidUsage",
-					message: `Monad type ${monad.name} cannot be used within the right side of extends operator`,
+					message: `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of another type, except in [monad, result] consumer returns`,
 					position: call.position,
 					path: call.scope.path,
 				})
 			}
-
-			if (call.parent && !isReturned(call)) {
-				// a monad can be passed to a generic type only as a first parameter
-				if (call.parent.arguments[0] !== call) {
-					violations.push({
-						kind: "monad.invalidUsage",
-						message: `Monad type ${monad.name} can be passed to a generic type only as a first parameter`,
-						position: call.position,
-						path: call.scope.path,
-					})
-				}
-
-				// a monad can be passed to a generic type only if that argument is mark as a monad
-				if (
-					call.parent.type.name !== "<extends>" &&
-					call.parent.type.ref.arguments[0]?.extends?.type.ref !== monadClass
-				) {
-					const type = callToType.get(call)
-					const isReader = type === monadReader
-					const isConsumer = type === monadConsumer
-					const isInReturningTuple = returns(body(type ?? null)).some(
-						c => c.type.name === "<tuple>" && c.arguments[0] === call,
-					)
-
-					if (!isReader && !isConsumer && !isInReturningTuple) {
-						violations.push({
-							kind: "monad.invalidUsage",
-							message: `Monad type ${monad.name} can be passed to a generic type only if that argument is mark as a monad`,
-							position: call.position,
-							path: call.scope.path,
-							relatedMessage: `${call.parent.type.ref.arguments[0]?.variable.name} is not marked as a monad`,
-							relatedPosition: call.parent.type.ref.arguments[0]?.variable.position,
-							relatedPath: call.parent.type.ref.arguments[0]?.variable.scope.path,
-						})
-					}
-				}
-			}
 		}
 	}
 
-	// to a type which defines the first parameter as a monad
-
-	// result of monad consumers call can only be immediately assigned to a variable of monad class type
+	for (const monadType of monadValueTypes) {
+		const seenInBranch: CGCall[] = []
+		const calls = Array.from(usages(monadType)).sort(compareCalls)
+		for (const call of calls) {
+			if (isIgnoredMonadUsage(call)) continue
+			const previous = seenInBranch.find(
+				prev => prev.type.ref === call.type.ref && scopeContains(prev.scope, call.scope),
+			)
+			if (previous) {
+				violations.push({
+					kind: "monad.invalidUsage",
+					message: `Using monad ${call.type.name} here is not allowed, because this branch already consumed it earlier. Only ${monadReader.name} may read the same monad multiple times`,
+					position: call.position,
+					path: call.scope.path,
+					relatedMessage: `The same branch already consumed ${call.type.name} here`,
+					relatedPosition: previous.position,
+					relatedPath: previous.scope.path,
+				})
+				continue
+			}
+			seenInBranch.push(call)
+		}
+	}
 
 	return violations
+
+	function terminalReturns(type: CGType): CGCall[] {
+		return Array.from(returns(body(type)))
+	}
+
+	function isTupleWithMonadResult(call: CGCall): boolean {
+		return call.type.name === "<tuple>" && call.arguments.length === 2 && isMonadValueCall(call.arguments[0]!)
+	}
+
+	function isConsumerReturnShape(call: CGCall): boolean {
+		return isTupleWithMonadResult(call) || consumerTypes.has(call.type.ref)
+	}
+
+	function isAllowedConsumerBranch(call: CGCall): boolean {
+		return call.type.name === "never" || isConsumerReturnShape(call)
+	}
+
+	function isMonadValueCall(call: CGCall): boolean {
+		return monadValueTypes.has(call.type.ref)
+	}
+
+	function isAllowedConsumerInvocation(call: CGCall): boolean {
+		if (consumerTypeInTupleHead(call)) return true
+		const owner = callToOwner.get(call)
+		if (owner && consumerTypes.has(owner) && terminalReturns(owner).some(ret => ret === call)) return true
+		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
+		return isTupleWithConfiguredMonad(call.parent.arguments[1] ?? null)
+	}
+
+	function isTupleWithConfiguredMonad(call: CGCall | null): boolean {
+		return (
+			!!call &&
+			call.type.name === "<tuple>" &&
+			call.arguments.length === 2 &&
+			call.arguments[0]?.type.ref === monadClass
+		)
+	}
+
+	function isIgnoredMonadUsage(call: CGCall): boolean {
+		const owner = callToOwner.get(call)
+		if (owner === monadReader || owner === monadConsumer) return true
+		return call.parent?.type.ref === monadReader
+	}
+
+	function isAllowedMonadClassMarkerUse(call: CGCall): boolean {
+		if (
+			call.parent?.type.name === "<extends>" &&
+			call.parent.arguments[1] === call &&
+			call.parent.arguments[0]?.type.name === "<typeDeclaration>"
+		) {
+			return true
+		}
+		if (call.parent?.type.name !== "<tuple>" || call.parent.arguments[0] !== call) return false
+		return call.parent.parent?.type.name === "<extends>" && call.parent.parent.arguments[1] === call.parent
+	}
+
+	function isMonadArgumentUsage(call: CGCall): boolean {
+		if (!call.parent) return false
+		if (call.parent.type.name === "<typeDeclaration>") return false
+		if (call.parent.type.name === "<declaration>") return false
+		if (call.parent.type.name === "<extends>") return false
+		if (call.parent.type.name === "<conditional>") return false
+		return true
+	}
+
+	function isAllowedTupleConsumerResultPosition(call: CGCall): boolean {
+		if (call.parent?.type.name !== "<tuple>") return false
+		if (call.parent.arguments[0] !== call) return false
+		const owner = callToOwner.get(call.parent)
+		if (!owner || !consumerTypes.has(owner)) return false
+		return terminalReturns(owner).some(ret => ret === call.parent)
+	}
+
+	function consumerTypeInTupleHead(call: CGCall): boolean {
+		if (call.type.ref !== monadConsumer) return false
+		if (call.parent?.type.name !== "<tuple>") return false
+		if (call.parent.arguments[0] !== call) return false
+		const owner = callToOwner.get(call.parent)
+		if (!owner || !consumerTypes.has(owner)) return false
+		return terminalReturns(owner).some(ret => ret === call.parent)
+	}
 }
 
 function usages(type: CGType) {
@@ -205,28 +293,21 @@ function* allCallsForType(type: CGType): Generator<CGCall> {
 	yield* allCalls(type.declaration?.parent)
 }
 
-function isInRightSideOfExtends(call: CGCall): boolean {
-	const pr = [call, ...parents(call)]
-	const ei = pr.findIndex(p => p.type.name === "<extends>")
-	return ei >= 0 && pr[ei].arguments[1] === pr[ei - 1]
-}
-
 function body(type: CGType | null | undefined): CGCall | undefined | null {
 	return type?.declaration?.parent?.arguments[1] ?? type?.body
 }
 
-function extend(type: CGType): CGCall | undefined | null {
-	return type.declaration?.parent?.parent?.arguments[1]
+function scopeContains(parent: { parent: typeof parent | null }, child: { parent: typeof child | null }): boolean {
+	let current: typeof child | null = child
+	while (current) {
+		if (current === parent) return true
+		current = current.parent
+	}
+	return false
 }
 
-function parameter(type: CGType, index: number = 0): CGCall | undefined {
-	return type.declaration?.parent?.arguments[index + 2]
-}
-
-function parameters(type: CGType): IteratorObject<CGCall> {
-	return (type.declaration?.parent?.arguments ?? []).values().drop(2)
-}
-
-function parametersCount(type: CGType): number {
-	return (type.declaration?.parent?.arguments ?? []).length - 2
+function compareCalls(left: CGCall, right: CGCall): number {
+	if (left.scope.path !== right.scope.path) return left.scope.path.localeCompare(right.scope.path)
+	if (left.position.start !== right.position.start) return left.position.start - right.position.start
+	return left.position.end - right.position.end
 }

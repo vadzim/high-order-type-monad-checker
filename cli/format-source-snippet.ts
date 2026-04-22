@@ -244,12 +244,3 @@ function newlineLen(source: string, at: number): number {
 	if (source[at] === "\n" || source[at] === "\r") return 1
 	return 0
 }
-
-function lineStartOffset(source: string, lines: string[], oneBasedLine: number): number {
-	let o = 0
-	for (let i = 0; i < oneBasedLine - 1; i++) {
-		const seg = lines[i] ?? ""
-		o += seg.length + newlineLen(source, o + seg.length)
-	}
-	return o
-}
