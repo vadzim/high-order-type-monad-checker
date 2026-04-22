@@ -14,15 +14,24 @@ export type CGScopeKind =
 	| "infer"
 
 export type CGParsedTypeKind = "typeAlias" | "interface" | "class" | "typeParameter" | "infer"
+type CGDeclaredTypeKind = Extract<CGParsedTypeKind, "typeAlias" | "interface" | "class">
+type CGDeclaredTypeNode = ts.TypeAliasDeclaration | ts.InterfaceDeclaration | ts.ClassDeclaration
+type CGDeclaredTypeParseContext = {
+	ownerType: CGType
+	activeScope: CGScope
+	typeParameterScope: CGScope | null
+}
+
+export type CGTypeArgument = {
+	variable: CGTypeRef
+	extends: CGCall | null
+	default: CGCall | null
+}
 
 export type CGType = {
 	name: string
 	position: CGPosition
-	arguments: {
-		variable: CGTypeRef
-		extends: CGCall | null
-		default: CGCall | null
-	}[]
+	arguments: CGTypeArgument[]
 	declaration: CGCall | null
 	body: CGCall | null
 	scope: CGScope
@@ -85,9 +94,11 @@ class ContentGraphBuilder {
 		this.externalTypes = new Map()
 	}
 
+	// Entry point
 	getContentGraph(): ContentGraph {
-		for (const statement of this.sourceFile.statements)
+		for (const statement of this.sourceFile.statements) {
 			if (ts.isImportDeclaration(statement)) this.addImportTypes(statement)
+		}
 		this.predeclareTopLevelTypes()
 		for (const statement of this.sourceFile.statements) {
 			if (ts.isTypeAliasDeclaration(statement)) this.parseTypeAlias(statement)
@@ -103,6 +114,7 @@ class ContentGraphBuilder {
 		return this.graph
 	}
 
+	// Graph construction primitives
 	private predeclareTopLevelTypes(): void {
 		for (const statement of this.sourceFile.statements) {
 			if (ts.isTypeAliasDeclaration(statement))
@@ -146,6 +158,7 @@ class ContentGraphBuilder {
 		this.graph.scopes.add(scope)
 		return scope
 	}
+
 	private createType(name: string, node: ts.Node, scope: CGScope, kind: CGParsedTypeKind): CGType {
 		const isSyntheticScope = scope.kind === "global" || (scope.kind === "file" && scope.parent === null)
 		const type: CGType = {
@@ -221,58 +234,72 @@ class ContentGraphBuilder {
 		}
 	}
 
+	// Top-level declaration parsing
 	private parseTypeAlias(decl: ts.TypeAliasDeclaration): void {
-		const type = this.ensureLocalDeclaredType(decl.name.text, decl.name, this.fileScope, "typeAlias")
-		const typeParameterScope = this.createTypeParameterScope(decl.typeParameters, type.scope)
-		type.arguments = this.collectTypeParameters(decl.typeParameters, typeParameterScope)
-		const activeScope = typeParameterScope ?? type.scope
-		const bodyRoot = this.walkTypeNode(decl.type, activeScope, this.fileScope, this.globalScope, type, true)
-		type.body = bodyRoot
-		this.addDeclarationRootCall(decl, type.scope, type, bodyRoot ? [bodyRoot] : [])
+		this.parseDeclaredType(decl, "typeAlias", ({ activeScope, ownerType }) =>
+			this.collectTypeRoots([decl.type], activeScope, this.fileScope, ownerType, true),
+		)
 	}
 
 	private parseInterface(decl: ts.InterfaceDeclaration): void {
-		const type = this.ensureLocalDeclaredType(decl.name.text, decl.name, this.fileScope, "interface")
-		const typeParameterScope = this.createTypeParameterScope(decl.typeParameters, type.scope)
-		type.arguments = this.collectTypeParameters(decl.typeParameters, typeParameterScope)
-		const activeScope = typeParameterScope ?? type.scope
-		const bodyRoots: CGCall[] = []
-		for (const heritage of decl.heritageClauses ?? [])
-			for (const item of heritage.types) {
-				const root = this.walkTypeNode(item, activeScope, this.fileScope, this.globalScope, type, true)
-				if (root) bodyRoots.push(root)
-			}
-		for (const member of decl.members)
-			if ((ts.isPropertySignature(member) || ts.isMethodSignature(member)) && member.type) {
-				const root = this.walkTypeNode(member.type, activeScope, this.fileScope, this.globalScope, type, false)
-				if (root) bodyRoots.push(root)
-			}
-		type.body = bodyRoots.at(-1) ?? null
-		this.addDeclarationRootCall(decl, type.scope, type, bodyRoots)
+		this.parseDeclaredType(decl, "interface", ({ activeScope, ownerType }) => {
+			const heritageRoots = this.collectTypeRoots(
+				(decl.heritageClauses ?? []).flatMap(heritage => heritage.types),
+				activeScope,
+				this.fileScope,
+				ownerType,
+				true,
+			)
+			const memberRoots = this.collectTypeRoots(
+				decl.members.flatMap(member =>
+					(ts.isPropertySignature(member) || ts.isMethodSignature(member)) && member.type ? [member.type] : [],
+				),
+				activeScope,
+				this.fileScope,
+				ownerType,
+				false,
+			)
+			return [...heritageRoots, ...memberRoots]
+		})
 	}
 
 	private parseClass(decl: ts.ClassDeclaration): void {
 		if (!decl.name) return
-		const type = this.ensureLocalDeclaredType(decl.name.text, decl.name, this.fileScope, "class")
+		this.parseDeclaredType(decl, "class", ({ activeScope, ownerType }) => {
+			const heritageRoots = this.collectTypeRoots(
+				(decl.heritageClauses ?? []).flatMap(heritage => heritage.types),
+				activeScope,
+				this.fileScope,
+				ownerType,
+				true,
+			)
+			const memberRoots = this.collectTypeRoots(
+				decl.members.flatMap(member => {
+					if (ts.isPropertyDeclaration(member) && member.type) return [member.type]
+					if (ts.isMethodDeclaration(member) && member.type) return [member.type]
+					return []
+				}),
+				activeScope,
+				this.fileScope,
+				ownerType,
+				false,
+			)
+			return [...heritageRoots, ...memberRoots]
+		})
+	}
+
+	private parseDeclaredType(
+		decl: CGDeclaredTypeNode,
+		kind: CGDeclaredTypeKind,
+		collectDeclarationBodyRoots: (context: CGDeclaredTypeParseContext) => CGCall[],
+	): void {
+		const nameNode = decl.name
+		if (!nameNode) return
+		const type = this.ensureLocalDeclaredType(nameNode.text, nameNode, this.fileScope, kind)
 		const typeParameterScope = this.createTypeParameterScope(decl.typeParameters, type.scope)
 		type.arguments = this.collectTypeParameters(decl.typeParameters, typeParameterScope)
 		const activeScope = typeParameterScope ?? type.scope
-		const bodyRoots: CGCall[] = []
-		for (const heritage of decl.heritageClauses ?? [])
-			for (const item of heritage.types) {
-				const root = this.walkTypeNode(item, activeScope, this.fileScope, this.globalScope, type, true)
-				if (root) bodyRoots.push(root)
-			}
-		for (const member of decl.members) {
-			if (ts.isPropertyDeclaration(member) && member.type) {
-				const root = this.walkTypeNode(member.type, activeScope, this.fileScope, this.globalScope, type, false)
-				if (root) bodyRoots.push(root)
-			}
-			if (ts.isMethodDeclaration(member) && member.type) {
-				const root = this.walkTypeNode(member.type, activeScope, this.fileScope, this.globalScope, type, false)
-				if (root) bodyRoots.push(root)
-			}
-		}
+		const bodyRoots = collectDeclarationBodyRoots({ ownerType: type, activeScope, typeParameterScope })
 		type.body = bodyRoots.at(-1) ?? null
 		this.addDeclarationRootCall(decl, type.scope, type, bodyRoots)
 	}
@@ -294,24 +321,16 @@ class ContentGraphBuilder {
 	private collectTypeParameters(
 		typeParameters: ts.NodeArray<ts.TypeParameterDeclaration> | undefined,
 		scope: CGScope | null,
-	): { variable: CGTypeRef; extends: CGCall | null; default: CGCall | null }[] {
+	): CGTypeArgument[] {
 		if (!typeParameters || !scope) return []
-		const refs: { variable: CGTypeRef; extends: CGCall | null; default: CGCall | null }[] = []
+		const refs: CGTypeArgument[] = []
 		for (const typeParam of typeParameters) {
 			const type = this.createType(typeParam.name.text, typeParam.name, scope, "typeParameter")
 			const ref = [...scope.types].find(r => r.ref === type && r.name === type.name)
 			if (!ref) continue
-			let extendsCall: CGCall | null = null
-			let defaultCall: CGCall | null = null
 			const globalScope = this.getGlobalScope(scope)
-			if (typeParam.default) {
-				const before = this.graph.calls.size
-				this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, type, false)
-				defaultCall = this.callsAddedSince(before, scope).at(-1) ?? null
-			}
-			const declarationBodyCall =
-				defaultCall ??
-				this.addCall(this.getOrCreateGlobalTypeRef("unknown", typeParam, globalScope), scope, [], typeParam)
+			const defaultCall = this.collectTypeParameterDefaultCall(typeParam, scope, globalScope, type)
+			const declarationBodyCall = defaultCall ?? this.createUnknownCall(typeParam, scope, globalScope)
 			const declarationCall = this.addTypeDeclarationCall(
 				type,
 				ref,
@@ -321,7 +340,7 @@ class ContentGraphBuilder {
 				[],
 				"infer",
 			)
-			extendsCall = this.createExtendsConstraintCall(
+			const extendsCall = this.createExtendsConstraintCall(
 				declarationCall,
 				typeParam.constraint,
 				scope,
@@ -335,6 +354,19 @@ class ContentGraphBuilder {
 		return refs
 	}
 
+	// Type parameter metadata
+	private collectTypeParameterDefaultCall(
+		typeParam: ts.TypeParameterDeclaration,
+		scope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+	): CGCall | null {
+		if (!typeParam.default) return null
+		const before = this.graph.calls.size
+		this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, ownerType, false)
+		return this.callsAddedSince(before, scope).at(-1) ?? null
+	}
+
 	private createExtendsConstraintCall(
 		leftCall: CGCall | null,
 		constraint: ts.TypeNode | undefined,
@@ -346,7 +378,7 @@ class ContentGraphBuilder {
 	): CGCall {
 		const rightCall =
 			constraint === undefined
-				? this.addCall(this.getOrCreateGlobalTypeRef("unknown", anchorNode, globalScope), scope, [], anchorNode)
+				? this.createUnknownCall(anchorNode, scope, globalScope)
 				: this.walkTypeNode(constraint, scope, declarationScope, globalScope, ownerType, false)
 		const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", anchorNode, scope)
 		return this.addCall(
@@ -408,6 +440,10 @@ class ContentGraphBuilder {
 		const globalRef = this.resolveTypeReference(name, globalScope)
 		if (!globalRef) throw new Error(`Failed to create global type ref for ${name}`)
 		return globalRef
+	}
+
+	private createUnknownCall(node: ts.Node, scope: CGScope, globalScope: CGScope): CGCall {
+		return this.addCall(this.getOrCreateGlobalTypeRef("unknown", node, globalScope), scope, [], node, "unknown")
 	}
 
 	private addCall(
@@ -513,9 +549,7 @@ class ContentGraphBuilder {
 	): CGCall | null {
 		if (bodyRoots.length === 0) return null
 		if (ownerType.kind === "typeAlias") {
-			const declarationRef = [...ownerType.scope.types].find(
-				r => r.ref === ownerType && r.name === ownerType.name,
-			)
+			const declarationRef = this.findDeclarationRef(ownerType)
 			if (!declarationRef) throw new Error(`Failed to find declaration ref for ${ownerType.name}`)
 			return this.addTypeDeclarationCall(
 				ownerType,
@@ -538,6 +572,187 @@ class ContentGraphBuilder {
 		)
 	}
 
+	private findDeclarationRef(type: CGType): CGTypeRef | null {
+		return [...type.scope.types].find(ref => ref.ref === type && ref.name === type.name) ?? null
+	}
+
+	private collectTypeRoots(
+		nodes: readonly ts.TypeNode[],
+		scope: CGScope,
+		declarationScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall[] {
+		const roots: CGCall[] = []
+		for (const node of nodes) {
+			const root = this.walkTypeNode(node, scope, declarationScope, this.globalScope, ownerType, isReturn)
+			if (root) roots.push(root)
+		}
+		return roots
+	}
+
+	private resolveNamedTypeReference(
+		name: string,
+		nameNode: ts.Node,
+		scope: CGScope,
+		globalScope: CGScope,
+	): CGTypeRef {
+		return this.resolveTypeReference(name, scope) ?? this.getOrCreateGlobalTypeRef(name, nameNode, globalScope)
+	}
+
+	private walkTypeReferenceNode(
+		node: ts.TypeReferenceNode,
+		scope: CGScope,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall | null {
+		const nameNode = node.typeName
+		if (!ts.isIdentifier(nameNode)) return null
+		const ref = this.resolveNamedTypeReference(nameNode.text, nameNode, scope, globalScope)
+		if (isReturn) ownerType.returns.add(ref)
+		const argCalls: CGCall[] = []
+		for (const arg of node.typeArguments ?? []) {
+			if (ts.isTypeReferenceNode(arg) && ts.isIdentifier(arg.typeName)) {
+				const argRef = this.resolveNamedTypeReference(arg.typeName.text, arg.typeName, scope, globalScope)
+				argCalls.push(this.addCall(argRef, scope, [], arg.typeName))
+			}
+			this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
+		}
+		return this.addCall(ref, scope, argCalls, nameNode)
+	}
+
+	private walkTypeLiteralNode(
+		node: ts.TypeLiteralNode,
+		scope: CGScope,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall {
+		const pairRoots: CGCall[] = []
+		for (const member of node.members) {
+			if (
+				(ts.isPropertySignature(member) || ts.isMethodSignature(member)) &&
+				member.type &&
+				member.name &&
+				(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))
+			) {
+				const memberName = ts.isIdentifier(member.name) ? member.name.text : member.name.text
+				const keyRef = this.getOrCreatePseudoTypeRef(`<${JSON.stringify(memberName)}>`, member.name, scope)
+				const keyCall = this.addCall(keyRef, scope, [], member.name)
+				const valueRoot = this.walkTypeNode(
+					member.type,
+					scope,
+					declarationScope,
+					globalScope,
+					ownerType,
+					false,
+				)
+				pairRoots.push(
+					this.addSyntaxPseudoCall(
+						"<pair>",
+						member.type,
+						scope,
+						ownerType,
+						false,
+						[keyCall, ...(valueRoot ? [valueRoot] : [])],
+						":",
+					),
+				)
+				continue
+			}
+			if (ts.isCallSignatureDeclaration(member) && member.type) {
+				const root = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false)
+				if (root) pairRoots.push(root)
+			}
+		}
+		return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots, "{")
+	}
+
+	private walkConditionalTypeNode(
+		node: ts.ConditionalTypeNode,
+		scope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall {
+		const conditionalScope = this.createScope("conditional", scope.path, node, scope)
+		const checkRoot = this.walkTypeNode(node.checkType, conditionalScope, conditionalScope, globalScope, ownerType, false)
+		const extendsTypeRoot = this.walkTypeNode(
+			node.extendsType,
+			conditionalScope,
+			conditionalScope,
+			globalScope,
+			ownerType,
+			false,
+		)
+		const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", node, conditionalScope)
+		const extendsCall = this.addCall(
+			extendsRef,
+			conditionalScope,
+			[checkRoot, extendsTypeRoot].filter((call): call is CGCall => call !== null),
+			node,
+			"extends",
+		)
+		const trueScope = this.createScope("branchTrue", conditionalScope.path, node.trueType, conditionalScope)
+		const trueRoot = this.collectScopedRoot(node.trueType, trueScope, globalScope, ownerType, true)
+		const falseScope = this.createScope("branchFalse", scope.path, node.falseType, scope)
+		const falseRoot = this.collectScopedRoot(node.falseType, falseScope, globalScope, ownerType, true)
+		const conditionalRef = this.getOrCreatePseudoTypeRef("<conditional>", node, scope)
+		if (isReturn) ownerType.returns.add(conditionalRef)
+		return this.addCall(
+			conditionalRef,
+			scope,
+			[extendsCall, trueRoot, falseRoot].filter((call): call is CGCall => call !== null),
+			node,
+			"extends",
+		)
+	}
+
+	private collectScopedRoot(
+		node: ts.TypeNode,
+		scope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall | null {
+		const callsBefore = this.graph.calls.size
+		this.walkTypeNode(node, scope, scope, globalScope, ownerType, isReturn)
+		return this.callsAddedSince(callsBefore, scope).at(-1) ?? null
+	}
+
+	private walkInferTypeNode(
+		node: ts.InferTypeNode,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+	): CGCall {
+		this.ensureLocalDeclaredType(node.typeParameter.name.text, node.typeParameter.name, declarationScope, "infer")
+		const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope)
+		const inferCall = inferredRef
+			? this.addTypeDeclarationCall(
+					inferredRef.ref,
+					inferredRef,
+					this.createUnknownCall(node, declarationScope, globalScope),
+					declarationScope,
+					node,
+					[],
+					"infer",
+				)
+			: null
+		return this.createExtendsConstraintCall(
+			inferCall,
+			node.typeParameter.constraint,
+			declarationScope,
+			declarationScope,
+			globalScope,
+			ownerType,
+			node,
+		)
+	}
+
 	private walkTypeNode(
 		node: ts.TypeNode,
 		scope: CGScope,
@@ -546,25 +761,9 @@ class ContentGraphBuilder {
 		ownerType: CGType,
 		isReturn: boolean,
 	): CGCall | null {
-		if (ts.isTypeReferenceNode(node)) {
-			const nameNode = node.typeName
-			if (!ts.isIdentifier(nameNode)) return null
-			const ref =
-				this.resolveTypeReference(nameNode.text, scope) ??
-				this.getOrCreateGlobalTypeRef(nameNode.text, nameNode, globalScope)
-			if (isReturn) ownerType.returns.add(ref)
-			const argCalls: CGCall[] = []
-			for (const arg of node.typeArguments ?? []) {
-				if (ts.isTypeReferenceNode(arg) && ts.isIdentifier(arg.typeName)) {
-					const argRef =
-						this.resolveTypeReference(arg.typeName.text, scope) ??
-						this.getOrCreateGlobalTypeRef(arg.typeName.text, arg.typeName, globalScope)
-					argCalls.push(this.addCall(argRef, scope, [], arg.typeName))
-				}
-				this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
-			}
-			return this.addCall(ref, scope, argCalls, nameNode)
-		}
+		if (ts.isTypeReferenceNode(node))
+			return this.walkTypeReferenceNode(node, scope, declarationScope, globalScope, ownerType, isReturn)
+
 		const intrinsicName = this.intrinsicPseudoName(node)
 		if (intrinsicName) {
 			const ref = this.getOrCreateGlobalTypeRef(intrinsicName, node, globalScope)
@@ -647,124 +846,12 @@ class ContentGraphBuilder {
 			if (indexRoot) roots.push(indexRoot)
 			return this.addSyntaxPseudoCall("<indexedAccess>", node, scope, ownerType, isReturn, roots, "[")
 		}
-		if (ts.isTypeLiteralNode(node)) {
-			const pairRoots: CGCall[] = []
-			for (const member of node.members) {
-				if (
-					(ts.isPropertySignature(member) || ts.isMethodSignature(member)) &&
-					member.type &&
-					member.name &&
-					(ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))
-				) {
-					const keyName = `<${JSON.stringify(ts.isIdentifier(member.name) ? member.name.text : member.name.text)}>`
-					const keyRef = this.getOrCreatePseudoTypeRef(keyName, member.name, scope)
-					const keyCall = this.addCall(keyRef, scope, [], member.name)
-					const valueRoot = this.walkTypeNode(
-						member.type,
-						scope,
-						declarationScope,
-						globalScope,
-						ownerType,
-						false,
-					)
-					const pairCall = this.addSyntaxPseudoCall(
-						"<pair>",
-						member.type,
-						scope,
-						ownerType,
-						false,
-						[keyCall, ...(valueRoot ? [valueRoot] : [])],
-						":",
-					)
-					pairRoots.push(pairCall)
-					continue
-				}
-				if (ts.isCallSignatureDeclaration(member) && member.type) {
-					const root = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false)
-					if (root) pairRoots.push(root)
-				}
-			}
-			return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots, "{")
-		}
-		if (ts.isConditionalTypeNode(node)) {
-			const conditionalScope = this.createScope("conditional", scope.path, node, scope)
-			const checkRoot = this.walkTypeNode(
-				node.checkType,
-				conditionalScope,
-				conditionalScope,
-				globalScope,
-				ownerType,
-				false,
-			)
-			const extendsTypeRoot = this.walkTypeNode(
-				node.extendsType,
-				conditionalScope,
-				conditionalScope,
-				globalScope,
-				ownerType,
-				false,
-			)
-			const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", node, conditionalScope)
-			const extendsCall = this.addCall(
-				extendsRef,
-				conditionalScope,
-				[checkRoot, extendsTypeRoot].filter((c): c is CGCall => c !== null),
-				node,
-				"extends",
-			)
-			const trueScope = this.createScope("branchTrue", conditionalScope.path, node.trueType, conditionalScope)
-			const trueCallsBefore = this.graph.calls.size
-			this.walkTypeNode(node.trueType, trueScope, trueScope, globalScope, ownerType, true)
-			const trueRoot = this.callsAddedSince(trueCallsBefore, trueScope).at(-1) ?? null
-			const falseScope = this.createScope("branchFalse", scope.path, node.falseType, scope)
-			const falseCallsBefore = this.graph.calls.size
-			this.walkTypeNode(node.falseType, falseScope, falseScope, globalScope, ownerType, true)
-			const falseRoot = this.callsAddedSince(falseCallsBefore, falseScope).at(-1) ?? null
-			const conditionalRef = this.getOrCreatePseudoTypeRef("<conditional>", node, scope)
-			if (isReturn) ownerType.returns.add(conditionalRef)
-			return this.addCall(
-				conditionalRef,
-				scope,
-				[extendsCall, trueRoot, falseRoot].filter((c): c is CGCall => c !== null),
-				node,
-				"extends",
-			)
-		}
-		if (ts.isInferTypeNode(node)) {
-			this.ensureLocalDeclaredType(
-				node.typeParameter.name.text,
-				node.typeParameter.name,
-				declarationScope,
-				"infer",
-			)
-			const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope)
-			const inferCall = inferredRef
-				? this.addTypeDeclarationCall(
-						inferredRef.ref,
-						inferredRef,
-						this.addCall(
-							this.getOrCreateGlobalTypeRef("unknown", node, globalScope),
-							declarationScope,
-							[],
-							node,
-							"unknown",
-						),
-						declarationScope,
-						node,
-						[],
-						"infer",
-					)
-				: null
-			return this.createExtendsConstraintCall(
-				inferCall,
-				node.typeParameter.constraint,
-				declarationScope,
-				declarationScope,
-				globalScope,
-				ownerType,
-				node,
-			)
-		}
+		if (ts.isTypeLiteralNode(node))
+			return this.walkTypeLiteralNode(node, scope, declarationScope, globalScope, ownerType, isReturn)
+		if (ts.isConditionalTypeNode(node))
+			return this.walkConditionalTypeNode(node, scope, globalScope, ownerType, isReturn)
+		if (ts.isInferTypeNode(node)) return this.walkInferTypeNode(node, declarationScope, globalScope, ownerType)
+
 		const fallbackArgs: CGCall[] = []
 		ts.forEachChild(node, child => {
 			if (ts.isTypeNode(child)) {
@@ -777,6 +864,7 @@ class ContentGraphBuilder {
 		return null
 	}
 
+	// Index maintenance
 	private rebuildCallIndexes(): void {
 		for (const scope of this.graph.scopes) scope.calls.clear()
 		for (const type of this.graph.types) type.called.clear()
