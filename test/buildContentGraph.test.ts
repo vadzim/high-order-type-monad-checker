@@ -221,6 +221,36 @@ test("buildContentTreeFromSource: object and pair pseudo calls are emitted", () 
 	assert.equal(pseudoNames.has("<array>"), false)
 })
 
+test("buildContentTreeFromSource: interface and class heritage types are preserved", () => {
+	const graph = validateContracts(
+		buildContentGraph(
+			"/tmp/file.ts",
+			"type A = string; interface I<T> extends A { x: T } class C<U> extends A { y: U }",
+		),
+	)
+	const iType = [...graph.types].find(t => t.name === "I" && t.scope.path === "/tmp/file.ts")
+	const cType = [...graph.types].find(t => t.name === "C" && t.scope.path === "/tmp/file.ts")
+	assert.ok(iType)
+	assert.ok(cType)
+	assert.ok(iType!.body)
+	assert.ok(cType!.body)
+	assert.equal(
+		[...iType!.returns].some(ref => ref.name === "A"),
+		true,
+	)
+	assert.equal(
+		[...cType!.returns].some(ref => ref.name === "A"),
+		true,
+	)
+	const iDecl = [...graph.calls].find(
+		c =>
+			c.type.name === "<declaration>" &&
+			c.scope.path === "/tmp/file.ts" &&
+			c.arguments.some(arg => arg.type.name === "A"),
+	)
+	assert.ok(iDecl)
+})
+
 test("buildContentTreeFromSource: type alias declaration root carries self ref, body, and generic constraints", () => {
 	const graph = validateContracts(
 		buildContentGraph("/tmp/file.ts", "type X<T extends string> = { a: string; b: [number] } | (boolean);"),
@@ -321,7 +351,7 @@ export function validateContracts(graph: ContentGraph) {
 	}
 
 	for (const type of graph.types) {
-		if (type.declaration || type.body) {
+		if (type.declaration) {
 			assert.equal(type.declaration?.arguments.length, 0)
 			assert.ok(type.declaration.parent)
 			assert.equal(type.declaration.parent!.type.name, "<typeDeclaration>")
@@ -338,12 +368,15 @@ export function validateContracts(graph: ContentGraph) {
 				}
 			}
 		}
+		if (!type.declaration && type.body) {
+			assert.ok(type.kind === "interface" || type.kind === "class")
+		}
 	}
 
 	const declarationCalls = new Set(
-		graph.types
+		graph.calls
 			.values()
-			.map(t => t.declaration?.parent)
+			.filter(call => call.parent == null)
 			.flatMap(walkCalls),
 	)
 

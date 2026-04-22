@@ -243,7 +243,7 @@ class ContentGraphBuilder {
 
 	private parseInterface(decl: ts.InterfaceDeclaration): void {
 		this.parseDeclaredType(decl, "interface", ({ activeScope, ownerType }) => {
-			const heritageRoots = this.collectTypeRoots(
+			const heritageRoots = this.collectHeritageRoots(
 				(decl.heritageClauses ?? []).flatMap(heritage => heritage.types),
 				activeScope,
 				this.fileScope,
@@ -268,7 +268,7 @@ class ContentGraphBuilder {
 	private parseClass(decl: ts.ClassDeclaration): void {
 		if (!decl.name) return
 		this.parseDeclaredType(decl, "class", ({ activeScope, ownerType }) => {
-			const heritageRoots = this.collectTypeRoots(
+			const heritageRoots = this.collectHeritageRoots(
 				(decl.heritageClauses ?? []).flatMap(heritage => heritage.types),
 				activeScope,
 				this.fileScope,
@@ -593,6 +593,21 @@ class ContentGraphBuilder {
 		return roots
 	}
 
+	private collectHeritageRoots(
+		nodes: readonly ts.ExpressionWithTypeArguments[],
+		scope: CGScope,
+		declarationScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall[] {
+		const roots: CGCall[] = []
+		for (const node of nodes) {
+			const root = this.walkHeritageTypeNode(node, scope, declarationScope, this.globalScope, ownerType, isReturn)
+			if (root) roots.push(root)
+		}
+		return roots
+	}
+
 	private resolveNamedTypeReference(
 		name: string,
 		nameNode: ts.Node,
@@ -620,6 +635,26 @@ class ContentGraphBuilder {
 			if (root) argCalls.push(root)
 		}
 		return this.addCall(ref, scope, argCalls, nameNode)
+	}
+
+	private walkHeritageTypeNode(
+		node: ts.ExpressionWithTypeArguments,
+		scope: CGScope,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+	): CGCall | null {
+		const expr = node.expression
+		if (!ts.isIdentifier(expr)) return null
+		const ref = this.resolveNamedTypeReference(expr.text, expr, scope, globalScope)
+		if (isReturn) ownerType.returns.add(ref)
+		const argCalls: CGCall[] = []
+		for (const arg of node.typeArguments ?? []) {
+			const root = this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false)
+			if (root) argCalls.push(root)
+		}
+		return this.addCall(ref, scope, argCalls, expr)
 	}
 
 	private walkTypeLiteralNode(
