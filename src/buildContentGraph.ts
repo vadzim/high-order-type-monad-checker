@@ -252,7 +252,9 @@ class ContentGraphBuilder {
 			)
 			const memberRoots = this.collectTypeRoots(
 				decl.members.flatMap(member =>
-					(ts.isPropertySignature(member) || ts.isMethodSignature(member)) && member.type ? [member.type] : [],
+					(ts.isPropertySignature(member) || ts.isMethodSignature(member)) && member.type
+						? [member.type]
+						: [],
 				),
 				activeScope,
 				this.fileScope,
@@ -329,8 +331,8 @@ class ContentGraphBuilder {
 			const ref = [...scope.types].find(r => r.ref === type && r.name === type.name)
 			if (!ref) continue
 			const globalScope = this.getGlobalScope(scope)
-			const defaultCall = this.collectTypeParameterDefaultCall(typeParam, scope, globalScope, type)
-			const declarationBodyCall = defaultCall ?? this.createUnknownCall(typeParam, scope, globalScope)
+			const explicitDefaultCall = this.collectTypeParameterDefaultCall(typeParam, scope, globalScope, type)
+			const declarationBodyCall = explicitDefaultCall ?? this.createUnknownCall(typeParam, scope, globalScope)
 			const declarationCall = this.addTypeDeclarationCall(
 				type,
 				ref,
@@ -349,7 +351,7 @@ class ContentGraphBuilder {
 				type,
 				typeParam,
 			)
-			refs.push({ variable: ref, extends: extendsCall.arguments[1] ?? null, default: defaultCall })
+			refs.push({ variable: ref, extends: extendsCall.arguments[1] ?? null, default: declarationBodyCall })
 		}
 		return refs
 	}
@@ -642,14 +644,7 @@ class ContentGraphBuilder {
 				const memberName = ts.isIdentifier(member.name) ? member.name.text : member.name.text
 				const keyRef = this.getOrCreatePseudoTypeRef(`<${JSON.stringify(memberName)}>`, member.name, scope)
 				const keyCall = this.addCall(keyRef, scope, [], member.name)
-				const valueRoot = this.walkTypeNode(
-					member.type,
-					scope,
-					declarationScope,
-					globalScope,
-					ownerType,
-					false,
-				)
+				const valueRoot = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false)
 				pairRoots.push(
 					this.addSyntaxPseudoCall(
 						"<pair>",
@@ -679,7 +674,14 @@ class ContentGraphBuilder {
 		isReturn: boolean,
 	): CGCall {
 		const conditionalScope = this.createScope("conditional", scope.path, node, scope)
-		const checkRoot = this.walkTypeNode(node.checkType, conditionalScope, conditionalScope, globalScope, ownerType, false)
+		const checkRoot = this.walkTypeNode(
+			node.checkType,
+			conditionalScope,
+			conditionalScope,
+			globalScope,
+			ownerType,
+			false,
+		)
 		const extendsTypeRoot = this.walkTypeNode(
 			node.extendsType,
 			conditionalScope,

@@ -269,8 +269,14 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.type.name, "<typeDeclaration>")
 	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments.length, 2)
 	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0]!.type.name, "B")
-	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[1]!.type.name, "unknown")
-	assert.equal(typeArgument!.variable.ref.declaration, typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0])
+	assert.equal(
+		typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[1]!.type.name,
+		"unknown",
+	)
+	assert.equal(
+		typeArgument!.variable.ref.declaration,
+		typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[0]!.arguments[0],
+	)
 	assert.equal(typeArgument!.variable.ref.declaration?.parent?.parent?.arguments[1], typeArgument!.extends)
 
 	const inferExtendsCall = [...graph.calls].find(
@@ -325,9 +331,10 @@ export function validateContracts(graph: ContentGraph) {
 				for (const [index, arg] of type.arguments.entries()) {
 					assert.ok(arg.extends)
 					assert.ok(arg.extends === type.declaration.parent!.arguments[2 + index].arguments[1])
-					assert.ok(arg.variable === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[0].type)
-					assert.ok(arg.variable.ref.body === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[1])
-					assert.ok((arg.default ?? arg.variable.ref.body) === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[1])
+					assert.ok(
+						arg.variable === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[0].type,
+					)
+					assert.ok(arg.default === type.declaration.parent!.arguments[2 + index].arguments[0].arguments[1])
 				}
 			}
 		}
