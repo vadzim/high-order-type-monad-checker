@@ -63,9 +63,9 @@ type Bad<M extends Monad> = Pair<M, M>
 				assert.equal(out.status, 1, out.stderr)
 				assert.match(
 					out.stderr,
-					/Using monad M here is not allowed, because this branch already consumed it earlier\./,
+					/Using monad M here is not allowed, because this evaluation path already consumed it earlier\./,
 				)
-				assert.match(out.stderr, /The same branch already consumed M here/)
+				assert.match(out.stderr, /The same evaluation path already consumed M here/)
 				assert.match(out.stderr, new RegExp(`${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`))
 				assert.match(out.stderr, /\n\s*\|\s*~+/m)
 			},

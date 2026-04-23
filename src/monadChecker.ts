@@ -20,13 +20,16 @@ export type MonadViolation = {
 	message: string
 	position: CGPosition
 	path: string
-	relatedMessage?: string
-	relatedPosition?: CGPosition
-	relatedPath?: string
+	related?: {
+		message?: string
+		position: CGPosition
+		path: string
+	}[]
 }
 
 export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption): MonadViolation[] {
-	const violations: MonadViolation[] = []
+	type ViolationRecord = { violation: MonadViolation; owner: CGType | null }
+	const violations: ViolationRecord[] = []
 	const settingsPath = normalizeTypePath(options.path)
 
 	const monadInfo = new Map(
@@ -54,6 +57,23 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	if (!monadClass) return []
 
+	function related(
+		...items: (
+			| {
+					message?: string
+					position?: CGPosition
+					path?: string
+			  }
+			| null
+			| undefined
+		)[]
+	): MonadViolation["related"] {
+		const normalized = items.flatMap(item =>
+			item?.position && item.path ? [{ message: item.message, position: item.position, path: item.path }] : [],
+		)
+		return normalized.length > 0 ? normalized : undefined
+	}
+
 	const callToOwner = new Map(graph.types.values().flatMap(type => allCallsForType(type).map(call => [call, type])))
 
 	const monadValueTypes = new Set<CGType>()
@@ -70,10 +90,20 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			if (arg.extends?.type.ref !== monadClass) continue
 			if (index !== 0) {
 				violations.push({
-					kind: "monad.invalidUsage",
-					message: `Using ${arg.variable.name} here as a monad-marked type parameter is not allowed, because only the first generic parameter may extend ${monadClass.name}`,
-					position: arg.variable.position,
-					path: arg.variable.scope.path,
+					owner: type,
+					violation: {
+						kind: "monad.invalidTypeParameterOrder",
+						message: `Using ${arg.variable.name} here as a monad-marked type parameter is not allowed, because only the first generic parameter may extend ${monadClass.name}`,
+						position: arg.variable.position,
+						path: arg.variable.scope.path,
+						related: related({
+							message: type.arguments[0]
+								? `Only the first generic parameter may extend ${monadClass.name}`
+								: undefined,
+							position: type.arguments[0]?.variable.position,
+							path: type.arguments[0]?.variable.scope.path,
+						}),
+					},
 				})
 			}
 			monadValueTypes.add(arg.variable.ref)
@@ -83,10 +113,18 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	for (const call of usages(monadClass)) {
 		if (!isAllowedMonadClassMarkerUse(call)) {
 			violations.push({
-				kind: "monad.invalidUsage",
-				message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration either immediately or as the first item of a tuple`,
-				position: call.position,
-				path: call.scope.path,
+				owner: callToOwner.get(call) ?? null,
+				violation: {
+					kind: "monad.invalidMarkerUsage",
+					message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration either immediately or as the first item of a tuple`,
+					position: call.position,
+					path: call.scope.path,
+					related: related({
+						message: `${monadClass.name} marker declaration is here`,
+						position: monadClass.position,
+						path: monadClass.scope.path,
+					}),
+				},
 			})
 			continue
 		}
@@ -110,7 +148,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	const consumerTypes = new Set<CGType>()
-	if (monadConsumer) consumerTypes
+	if (monadConsumer) consumerTypes.add(monadConsumer)
 	const userMonadInputTypes = new Set(
 		Array.from(graph.types).filter(
 			type => type.kind === "typeAlias" && type !== monadConsumer && type !== monadReader && hasMonadInput(type),
@@ -136,14 +174,34 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const branches = terminalReturns(consumerType)
 		for (const branch of branches) {
 			if (isAllowedConsumerBranch(branch)) continue
+			const sourceReturn = body(branch.type.ref)
+			const sourceRelated =
+				sourceReturn && branch.type.ref !== consumerType
+					? {
+							message: `${branch.type.name} return source is here`,
+							position: sourceReturn.position,
+							path: sourceReturn.scope.path,
+						}
+					: null
 			violations.push({
-				kind: "monad.incompatibleTypes",
-				message: `This branch of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never in every branch`,
-				position: branch.position,
-				path: branch.scope.path,
-				relatedMessage: `${consumerType.name} accepts monad input here`,
-				relatedPosition: consumerType.position,
-				relatedPath: consumerType.scope.path,
+				owner: consumerType,
+				violation: {
+					kind: "monad.incompatibleTypes",
+					message:
+						branches.length > 1
+							? `This branch of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never in every branch`
+							: `Return type of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never`,
+					position: branch.position,
+					path: branch.scope.path,
+					related: related(
+						{
+							message: `${consumerType.name} accepts monad input here`,
+							position: consumerType.position,
+							path: consumerType.scope.path,
+						},
+						sourceRelated,
+					),
+				},
 			})
 		}
 	}
@@ -152,10 +210,18 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		for (const call of usages(consumerType)) {
 			if (isAllowedConsumerInvocation(call)) continue
 			violations.push({
-				kind: "monad.invalidUsage",
-				message: `Using consumer ${consumerType.name} here is not allowed. It must be either the terminal return of another consumer branch, or the immediate left side of extends with a right side like [${monadClass.name}, result]`,
-				position: call.position,
-				path: call.scope.path,
+				owner: callToOwner.get(call) ?? consumerType,
+				violation: {
+					kind: "monad.invalidConsumerInvocation",
+					message: `Using consumer ${consumerType.name} here is not allowed. It must be either in terminal return position of another consumer, or as the immediate left side of extends with a right side like [${monadClass.name}, result]`,
+					position: call.position,
+					path: call.scope.path,
+					related: related({
+						message: `${consumerType.name} is declared here`,
+						position: consumerType.position,
+						path: consumerType.scope.path,
+					}),
+				},
 			})
 		}
 	}
@@ -164,12 +230,37 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	for (const producerType of userProducerTypes) {
 		for (const call of usages(producerType)) {
+			if (isProducerConditionalPatternError(call)) {
+				violations.push({
+					owner: callToOwner.get(call) ?? producerType,
+					violation: {
+						kind: "monad.invalidProducerPattern",
+						message: `Using producer ${producerType.name} here is not allowed, because conditional destructuring must use a right-side tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
+						position: call.position,
+						path: call.scope.path,
+						related: related({
+							message: `${producerType.name} is declared here`,
+							position: producerType.position,
+							path: producerType.scope.path,
+						}),
+					},
+				})
+				continue
+			}
 			if (isAllowedUserProducerInvocation(call)) continue
 			violations.push({
-				kind: "monad.invalidUsage",
-				message: `Using producer ${producerType.name} here is not allowed. A user producer call must be either the immediate terminal return of another user producer, or the immediate left side of conditional extends with a tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
-				position: call.position,
-				path: call.scope.path,
+				owner: callToOwner.get(call) ?? producerType,
+				violation: {
+					kind: "monad.invalidProducerInvocation",
+					message: `Using producer ${producerType.name} here is not allowed. A user producer call must be either in immediate terminal return position of another user producer, or as the immediate left side of conditional extends with a tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
+					position: call.position,
+					path: call.scope.path,
+					related: related({
+						message: `${producerType.name} is declared here`,
+						position: producerType.position,
+						path: producerType.scope.path,
+					}),
+				},
 			})
 		}
 	}
@@ -182,11 +273,36 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			const parent = call.parent
 			if (!parent) continue
 			if (parent.arguments[0] !== call || !hasMonadInput(parent.type.ref)) {
+				const calleeType = parent.type.ref
+				const firstArg = calleeType.arguments[0]
+				let relatedMessage =
+					parent.arguments[0] !== call
+						? "The first argument slot is here"
+						: firstArg
+							? `${calleeType.name}'s first generic parameter is declared here`
+							: undefined
+				let relatedPosition =
+					parent.arguments[0] !== call ? parent.arguments[0]?.position : firstArg?.variable.position
+				let relatedPath =
+					parent.arguments[0] !== call ? parent.arguments[0]?.scope.path : firstArg?.variable.scope.path
+				if (!relatedMessage) {
+					relatedMessage = monadUsageContextMessage(parent)
+					relatedPosition = parent.position
+					relatedPath = parent.scope.path
+				}
 				violations.push({
-					kind: "monad.invalidUsage",
-					message: `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of a type whose first generic parameter is monad-bound, except in [monad, result] consumer returns`,
-					position: call.position,
-					path: call.scope.path,
+					owner: callToOwner.get(call) ?? null,
+					violation: {
+						kind: monadArgumentUsageKind(parent),
+						message: monadUsageErrorMessage(call, parent),
+						position: call.position,
+						path: call.scope.path,
+						related: related({
+							message: relatedMessage,
+							position: relatedPosition,
+							path: relatedPath,
+						}),
+					},
 				})
 			}
 		}
@@ -204,13 +320,18 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			)
 			if (previous) {
 				violations.push({
-					kind: "monad.invalidUsage",
-					message: `Using monad ${call.type.name} here is not allowed, because this branch already consumed it earlier. Only ${options.readerName} may read the same monad multiple times`,
-					position: call.position,
-					path: call.scope.path,
-					relatedMessage: `The same branch already consumed ${call.type.name} here`,
-					relatedPosition: previous.position,
-					relatedPath: previous.scope.path,
+					owner: callToOwner.get(call) ?? null,
+					violation: {
+						kind: "monad.multipleConsumption",
+						message: `Using monad ${call.type.name} here is not allowed, because this evaluation path already consumed it earlier. Only ${options.readerName} may read the same monad multiple times`,
+						position: call.position,
+						path: call.scope.path,
+						related: related({
+							message: `The same evaluation path already consumed ${call.type.name} here`,
+							position: previous.position,
+							path: previous.scope.path,
+						}),
+					},
 				})
 				continue
 			}
@@ -218,7 +339,69 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 	}
 
-	return violations
+	const ownerKinds = new Map<CGType, Set<string>>()
+	const ownerViolations = new Map<CGType, MonadViolation[]>()
+	for (const record of violations) {
+		if (!record.owner) continue
+		if (!ownerKinds.has(record.owner)) ownerKinds.set(record.owner, new Set())
+		ownerKinds.get(record.owner)!.add(record.violation.kind)
+		if (!ownerViolations.has(record.owner)) ownerViolations.set(record.owner, [])
+		ownerViolations.get(record.owner)!.push(record.violation)
+	}
+
+	return compactViolations(
+		violations
+			.filter(record => {
+				if (!record.owner) return true
+				const kinds = ownerKinds.get(record.owner)
+				if (!kinds) return true
+				const kind = record.violation.kind
+
+				// Focus on generic parameter-order root cause for this declaration.
+				if (kinds.has("monad.invalidTypeParameterOrder")) {
+					return kind === "monad.invalidTypeParameterOrder"
+				}
+
+				// If invocation structure is wrong, branch-shape incompatibility is derivative noise.
+				if (
+					kind === "monad.incompatibleTypes" &&
+					(kinds.has("monad.invalidProducerPattern") ||
+						kinds.has("monad.invalidProducerInvocation") ||
+						kinds.has("monad.invalidConsumerInvocation"))
+				) {
+					return false
+				}
+
+				// If producer conditional pattern is wrong, marker-use error in that same declaration is derivative.
+				if (kind === "monad.invalidMarkerUsage" && kinds.has("monad.invalidProducerPattern")) {
+					return false
+				}
+
+				// If "consumed twice" is present, hide generic context-level monad usage diagnostics in that declaration.
+				if (kind === "monad.invalidMonadUsageContext" && kinds.has("monad.multipleConsumption")) {
+					return false
+				}
+
+				// If monad argument-position misuse is present, producer-invocation error is derivative noise.
+				if (kind === "monad.invalidProducerInvocation" && kinds.has("monad.invalidMonadUsageContext")) {
+					const ownerMessages = ownerViolations.get(record.owner) ?? []
+					if (
+						ownerMessages.some(
+							v =>
+								v.kind === "monad.invalidMonadUsageContext" &&
+								v.message.includes(
+									"passed as the first argument of a type whose first generic parameter is monad-bound",
+								),
+						)
+					) {
+						return false
+					}
+				}
+
+				return true
+			})
+			.map(record => record.violation),
+	)
 
 	function terminalReturns(type: CGType): CGCall[] {
 		return Array.from(returns(body(type)))
@@ -256,6 +439,13 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		return false
 	}
 
+	function isProducerConditionalPatternError(call: CGCall): boolean {
+		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
+		if (call.parent.parent?.type.name !== "<conditional>" || call.parent.parent.arguments[0] !== call.parent)
+			return false
+		return !isInferMonadTupleDestructurePattern(call.parent.arguments[1] ?? null)
+	}
+
 	function isProducerReturnedImmediatelyByProducer(call: CGCall): boolean {
 		const owner = callToOwner.get(call)
 		if (!owner || !userProducerTypes.has(owner)) return false
@@ -277,6 +467,37 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const firstLeft = first.arguments[0]
 		if (!firstLeft || firstLeft.type.name !== "<typeDeclaration>") return false
 		return first.arguments[1]?.type.ref === monadClass
+	}
+
+	function monadUsageErrorMessage(call: CGCall, parent: CGCall): string {
+		if (parent.type.name === "<indexedAccess>") {
+			return `Using monad ${call.type.name} here is not allowed, because indexed access cannot consume monad values`
+		}
+		if (parent.type.name === "<typeOperator>" || parent.type.name === "<syntax>") {
+			return `Using monad ${call.type.name} here is not allowed, because this syntax form cannot consume monad values`
+		}
+		if (parent.type.name === "<tuple>" || parent.type.name === "<readonlyTuple>") {
+			return `Using monad ${call.type.name} here is not allowed, because tuple usage is allowed only for [monad, result] consumer returns`
+		}
+		if (parent.type.name === "<object>" || parent.type.name === "<pair>" || parent.type.name === "<readonlyPair>") {
+			return `Using monad ${call.type.name} here is not allowed, because object wrappers cannot consume monad values`
+		}
+		return `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of a type whose first generic parameter is monad-bound, except in [monad, result] consumer returns`
+	}
+
+	function monadArgumentUsageKind(parent: CGCall): string {
+		return "monad.invalidMonadUsageContext"
+	}
+
+	function monadUsageContextMessage(parent: CGCall): string {
+		if (parent.type.name === "<indexedAccess>") return "Indexed access usage context is here"
+		if (parent.type.name === "<typeOperator>" || parent.type.name === "<syntax>")
+			return "This syntax usage context is here"
+		if (parent.type.name === "<tuple>" || parent.type.name === "<readonlyTuple>")
+			return "Tuple usage context is here"
+		if (parent.type.name === "<object>" || parent.type.name === "<pair>" || parent.type.name === "<readonlyPair>")
+			return "Object usage context is here"
+		return "Usage context is here"
 	}
 
 	function isTupleWithConfiguredMonadPattern(call: CGCall | null): boolean {
@@ -415,6 +636,77 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			current = current.parent
 		}
 		return null
+	}
+}
+
+function compactViolations(violations: MonadViolation[]): MonadViolation[] {
+	const unique = new Map<string, MonadViolation>()
+	for (const violation of violations) {
+		const key = [
+			violation.kind,
+			violation.path,
+			violation.position.start,
+			violation.position.end,
+			violation.message,
+		].join("::")
+		if (!unique.has(key)) unique.set(key, violation)
+	}
+
+	const reduced = suppressGenericBranchViolations(Array.from(unique.values()))
+
+	const groupedBySpan = Map.groupBy(reduced.values(), violation =>
+		[violation.path, violation.position.start, violation.position.end].join("::"),
+	)
+
+	return Array.from(groupedBySpan.values())
+		.flatMap(group =>
+			group
+				.sort((left: MonadViolation, right: MonadViolation) => violationRank(left) - violationRank(right))
+				.slice(0, 1),
+		)
+		.sort((left, right) => {
+			if (left.path !== right.path) return left.path.localeCompare(right.path)
+			if (left.position.start !== right.position.start) return left.position.start - right.position.start
+			if (left.position.end !== right.position.end) return left.position.end - right.position.end
+			return violationRank(left) - violationRank(right)
+		})
+}
+
+function suppressGenericBranchViolations(violations: MonadViolation[]): MonadViolation[] {
+	return violations.filter(violation => {
+		if (violation.kind !== "monad.incompatibleTypes") return true
+		return !violations.some(candidate => {
+			if (candidate === violation) return false
+			if (!candidate.kind.startsWith("monad.invalid")) return false
+			if (candidate.path !== violation.path) return false
+			return (
+				candidate.position.start >= violation.position.start && candidate.position.end <= violation.position.end
+			)
+		})
+	})
+}
+
+function violationRank(violation: MonadViolation): number {
+	if (violation.message.includes("already consumed it earlier")) return 0
+	if (violation.message.startsWith("Using producer ")) return 1
+	if (violation.message.startsWith("Using consumer ")) return 1
+	if (violation.message.includes("only the first generic parameter may extend")) return 1
+	if (violation.message.includes("is only a marker type")) return 2
+	switch (violation.kind) {
+		case "monad.multipleConsumption":
+			return 0
+		case "monad.invalidProducerPattern":
+		case "monad.invalidProducerInvocation":
+		case "monad.invalidConsumerInvocation":
+		case "monad.invalidTypeParameterOrder":
+			return 1
+		case "monad.invalidMarkerUsage":
+		case "monad.invalidMonadUsageContext":
+			return 2
+		case "monad.incompatibleTypes":
+			return 3
+		default:
+			return violation.kind.startsWith("monad.invalid") ? 4 : 5
 	}
 }
 

@@ -111,7 +111,7 @@ test("checkMonad rule matrix", async t => {
 				})
 
 				const formattedViolations = violations
-					.map(violation => formatGraphViolation(violation, files))
+					.map(violation => formatGraphViolation(violation, files, { contextBefore: 7, contextAfter: 5 }))
 					.join("\n\n")
 
 				// const { files, violations } = getScenarioViolations(sample.source, multipleFilesMode)
@@ -122,6 +122,20 @@ test("checkMonad rule matrix", async t => {
 						console.error(formattedViolations)
 					}
 					assert.ok(violations.length > 0, "Expected at least one violation")
+					if (sample.expectedKinds) {
+						const actualKinds = Array.from(new Set(violations.map(violation => violation.kind))).sort()
+						const expectedKinds = Array.from(new Set(sample.expectedKinds)).sort()
+						assert.deepEqual(
+							actualKinds,
+							expectedKinds,
+							[
+								`Expected exact violation kinds for sample: ${sample.name}`,
+								`Expected: ${expectedKinds.join(", ")}`,
+								`Actual: ${actualKinds.join(", ")}`,
+								formattedViolations,
+							].join("\n"),
+						)
+					}
 				}
 			})
 		}

@@ -10,22 +10,40 @@ export function formatGraphViolation(
 	if (!source) return null
 
 	const position = normalizePosition(violation.position, source)
-	let result = formatSourceSnippetFromOffsets(violation.path, violation.message, source, position, options)
+	let result = formatSourceSnippetFromOffsets(
+		violation.path,
+		`[${violation.kind}] ${violation.message}`,
+		source,
+		position,
+		options,
+	)
 
-	if (violation.relatedPosition && violation.relatedPath) {
-		const relatedSource = files.get(violation.relatedPath)
-		if (relatedSource) {
-			const relatedPosition = normalizePosition(violation.relatedPosition, relatedSource)
-			const relatedMessage = violation.relatedMessage ?? "Related context:"
+	const relatedItems: {
+		message?: string
+		position: { start: number; end: number }
+		path: string
+	}[] = violation.related ? [...violation.related] : []
+
+	if (relatedItems.length > 0) {
+		const relatedChunks: string[] = []
+		for (const related of relatedItems) {
+			const relatedSource = files.get(related.path)
+			if (!relatedSource) continue
+			const relatedPosition = normalizePosition(related.position, relatedSource)
+			const relatedMessage = related.message ?? "Related context:"
 			const relatedSnippet = formatSourceSnippetFromOffsets(
-				violation.relatedPath,
+				related.path,
 				relatedMessage,
 				relatedSource,
 				relatedPosition,
 				options,
 			)
+			relatedChunks.push(indentSnippet(relatedSnippet, "    "))
+		}
+		if (relatedChunks.length > 0) {
 			result += "\n\n"
-			result += indentSnippet(relatedSnippet, "    ")
+			result += "    Related:\n"
+			result += relatedChunks.join("\n\n")
 		}
 	}
 

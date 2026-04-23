@@ -210,7 +210,7 @@ type PParse<T extends Monad> = [Read<"x", T>] extends [
 	? [Rest, Name]
 	: never;
 `,
-		expectedKinds: ["monad.monadArgRequiresMonadBoundParameter"],
+		expectedKinds: ["monad.invalidMonadUsageContext"],
 	},
 	{
 		name: `fail: monad value passed to not Monad-bound parameter, not invalidProducerReturn on [Rest, Name]`,
@@ -223,7 +223,7 @@ type PParse<T extends Monad> = [Read<"", T>] extends [
 	? [Rest, Name]
 	: never;
 `,
-		expectedKinds: ["monad.monadArgRequiresMonadBoundParameter"],
+		expectedKinds: ["monad.invalidMonadUsageContext"],
 	},
 	{
 		name: `ok: monad-compatible generic parameter in first slot is allowed`,
@@ -267,7 +267,7 @@ type Wrap<T> = Monad;
 		source: `
 type X<T> = T extends 1 ? Monad : 1;
 `,
-		expectedKinds: ["monad.inconsistentBranchReturn"],
+		expectedKinds: ["monad.invalidMarkerUsage"],
 	},
 	{
 		name: `fail: constructor type cannot return monad as tuple first element`,
@@ -280,14 +280,14 @@ type Build = [Monad, 1];
 		source: `
 type P<A extends Monad> = [A, A];
 `,
-		expectedKinds: ["monad.consumeMultipleInPath"],
+		expectedKinds: ["monad.multipleConsumption"],
 	},
 	{
 		name: `fail: monad variable cannot be reused in child scope after parent usage`,
 		source: `
 type P<A extends Monad> = [A] extends [infer X] ? A : never;
 `,
-		expectedKinds: ["monad.consumeMultipleInPath"],
+		expectedKinds: ["monad.multipleConsumption"],
 	},
 	{
 		name: `ok: monad variable can be used in sibling conditional branches`,
