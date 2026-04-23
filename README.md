@@ -32,22 +32,19 @@ This lets aliases such as “next monad” wrappers participate in the rules wit
 
 ### What counts as a consumer
 
-A type alias is treated as a consumer if at least one terminal return branch is either:
+The configured `consumerName` type is the only special consumer that is allowed to:
 
-- a tuple `[monad, result]`
-- a direct call to another consumer
-
-The configured primitive consumer from settings is also seeded into the consumer set so other consumers may return calls to it.
+- accept monad input
+- return a bare monad value
 
 ### Consumer return rules
 
-Once a type is classified as a consumer, every terminal return branch must be one of:
+For every user type alias (not the configured primitive consumer and not the configured reader) that accepts monad input, every terminal return branch must be one of:
 
 - `[monad, result]`
-- a direct call to another consumer
 - `never`
 
-If one branch is consumer-shaped and another branch returns something else, that is a violation.
+If such a type returns a bare monad in any branch, that is a violation.
 
 ### Consumer invocation rules
 
@@ -109,8 +106,8 @@ The checker is trying to model an expensive state-like value:
 
 - the configured monad class only marks values; it is not itself consumable
 - readers may inspect it
-- the primitive consumer may advance it
-- higher-level consumers must return either a new `[monad, result]`, another consumer call, or `never`
+- the configured primitive consumer may advance it and return a bare monad
+- user types that accept monad input must return `[monad, result]` (or `never`), not a bare monad
 - outside of the reader exception, the same monad should not be consumed more than once along a single branch path
 
 ## CLI

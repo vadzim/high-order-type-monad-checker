@@ -98,7 +98,7 @@ test("checkMonad rule matrix", async t => {
 	for (const sample of [
 		{
 			name: "ok: marker is used to declare first generic parameter",
-			source: `type Ok<M extends Monad> = M;`,
+			source: `type Ok<M extends Monad> = [M, 0];`,
 			ok: true,
 		},
 		{
@@ -137,9 +137,9 @@ test("checkMonad rule matrix", async t => {
 			ok: false,
 		},
 		{
-			name: "ok: consumer may return another consumer call",
-			source: `type Ok<M extends Monad> = MNext<M>;`,
-			ok: true,
+			name: "fail: user type with monad input cannot return bare monad",
+			source: `type Bad<M extends Monad> = MNext<M>;`,
+			ok: false,
 		},
 		{
 			name: "fail: consumer call cannot be wrapped",

@@ -90,31 +90,37 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	const consumerTypes = new Set<CGType>([monadConsumer])
+	const userMonadInputTypes = new Set(
+		Array.from(graph.types).filter(
+			type => type.kind === "typeAlias" && type !== monadConsumer && type !== monadReader && hasMonadInput(type),
+		),
+	)
+	const tupleReturnTypes = new Set<CGType>()
 
 	changed = true
 	while (changed) {
 		changed = false
 		for (const type of graph.types) {
-			if (type.kind !== "typeAlias" || consumerTypes.has(type)) continue
+			if (type.kind !== "typeAlias" || tupleReturnTypes.has(type)) continue
 			const branches = terminalReturns(type)
-			if (branches.some(isConsumerReturnShape)) {
-				consumerTypes.add(type)
+			if (branches.length === 0) continue
+			if (branches.every(isAllowedConsumerBranch)) {
+				tupleReturnTypes.add(type)
 				changed = true
 			}
 		}
 	}
 
-	for (const consumerType of consumerTypes) {
-		if (consumerType === monadConsumer) continue
+	for (const consumerType of userMonadInputTypes) {
 		const branches = terminalReturns(consumerType)
 		for (const branch of branches) {
 			if (isAllowedConsumerBranch(branch)) continue
 			violations.push({
 				kind: "monad.incompatibleTypes",
-				message: `This branch of ${consumerType.name} is not allowed, because once a type becomes a consumer every branch must return [monad, result], another consumer call, or never`,
+				message: `This branch of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never in every branch`,
 				position: branch.position,
 				path: branch.scope.path,
-				relatedMessage: `${consumerType.name} becomes a consumer here`,
+				relatedMessage: `${consumerType.name} accepts monad input here`,
 				relatedPosition: consumerType.position,
 				relatedPath: consumerType.scope.path,
 			})
@@ -185,12 +191,8 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		return call.type.name === "<tuple>" && call.arguments.length === 2 && isMonadValueCall(call.arguments[0]!)
 	}
 
-	function isConsumerReturnShape(call: CGCall): boolean {
-		return isTupleWithMonadResult(call) || consumerTypes.has(call.type.ref)
-	}
-
 	function isAllowedConsumerBranch(call: CGCall): boolean {
-		return call.type.name === "never" || isConsumerReturnShape(call)
+		return call.type.name === "never" || isTupleWithMonadResult(call) || tupleReturnTypes.has(call.type.ref)
 	}
 
 	function isMonadValueCall(call: CGCall): boolean {
@@ -200,7 +202,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	function isAllowedConsumerInvocation(call: CGCall): boolean {
 		if (consumerTypeInTupleHead(call)) return true
 		const owner = callToOwner.get(call)
-		if (owner && consumerTypes.has(owner) && terminalReturns(owner).some(ret => ret === call)) return true
+		if (owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
 		return isTupleWithConfiguredMonadPattern(call.parent.arguments[1] ?? null)
 	}
@@ -275,7 +277,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (call.parent?.type.name !== "<tuple>") return false
 		if (call.parent.arguments[0] !== call) return false
 		const owner = callToOwner.get(call.parent)
-		if (!owner || !consumerTypes.has(owner)) return false
+		if (!owner || !(owner === monadConsumer || hasMonadInput(owner))) return false
 		return terminalReturns(owner).some(ret => ret === call.parent)
 	}
 
@@ -284,8 +286,12 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (call.parent?.type.name !== "<tuple>") return false
 		if (call.parent.arguments[0] !== call) return false
 		const owner = callToOwner.get(call.parent)
-		if (!owner || !consumerTypes.has(owner)) return false
+		if (!owner || !(owner === monadConsumer || hasMonadInput(owner))) return false
 		return terminalReturns(owner).some(ret => ret === call.parent)
+	}
+
+	function hasMonadInput(type: CGType): boolean {
+		return type.arguments[0]?.extends?.type.ref === monadClass
 	}
 }
 
