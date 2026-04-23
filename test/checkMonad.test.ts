@@ -5,7 +5,8 @@ import { concatContentGraphs } from "../src/concatContentGraphs.ts"
 import assert from "node:assert/strict"
 import { never } from "../src/utils.ts"
 import { validateContracts } from "./buildContentGraph.test.ts"
-import { monadSamples, type MonadSample } from "./checkMonad.samples.ts"
+import { monadSamples } from "./checkMonad.samples.ts"
+import { formatGraphViolation } from "../cli/format-graph-violation.ts"
 
 const monadModule = `
 export type Monad = { head: string, tail: string }
@@ -31,13 +32,6 @@ function buildScenarioGraph(files: Map<string, string>) {
 			files.entries().map(([path, content]) => validateContracts(buildContentGraph(path, content))),
 		),
 	)
-}
-
-function formatViolations(files: Map<string, string>, violations: ReturnType<typeof getMonadViolations>) {
-	return violations.map(violation => {
-		const file = files.get(violation.path) ?? ""
-		return `${violation.kind}: ${violation.message}\n${file.slice(violation.position.start, violation.position.end)}`
-	})
 }
 
 test("checkMonad basic", async () => {
@@ -86,7 +80,7 @@ test("checkMonad rule matrix", async t => {
 	for (const sample of monadSamples) {
 		for (const multipleFilesMode of ["same", "different", "alone"] as const) {
 			const files = new Map(
-				multipleFilesMode === "same"
+				(multipleFilesMode === "same"
 					? "source" in sample
 						? [[sample.file || "../samples/api.ts", `${monadModule}\n${sample.source}`] as const]
 						: []
@@ -96,7 +90,8 @@ test("checkMonad rule matrix", async t => {
 								? [{ file: sample.file || "../samples/file.ts", source: sample.source }]
 								: sample.modules
 							).map(({ file, source }) => [file, `${fileModule}\n${source}`] as const),
-						],
+						]
+				).map(([path, content]) => [path, content.trim()] as const),
 			)
 
 			if (files.size === 0) continue
@@ -115,12 +110,16 @@ test("checkMonad rule matrix", async t => {
 					strictMonadModule: multipleFilesMode !== "alone",
 				})
 
+				const formattedViolations = violations
+					.map(violation => formatGraphViolation(violation, files))
+					.join("\n\n")
+
 				// const { files, violations } = getScenarioViolations(sample.source, multipleFilesMode)
 				if (sample.name.startsWith("ok:")) {
-					assert.ok(violations.length === 0, formatViolations(files, violations).join("\n\n"))
+					assert.ok(violations.length === 0, formattedViolations)
 				} else {
-					if (violations.length > 0) {
-						console.error(formatViolations(files, violations).join("\n\n"))
+					if (formattedViolations && multipleFilesMode === "different") {
+						console.error(formattedViolations)
 					}
 					assert.ok(violations.length > 0, "Expected at least one violation")
 				}
