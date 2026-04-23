@@ -121,6 +121,21 @@ test("buildContentTreeFromSource: imported type is local ref to placeholder CTTy
 	assert.equal(localImportRef!.ref.kind, "typeAlias")
 })
 
+test("buildContentTreeFromSource: throws fast on duplicate imported local names", () => {
+	assert.throws(
+		() =>
+			buildContentGraph("/tmp/file.ts", "import type { A as X } from './a'; import type { B as X } from './b';"),
+		/Duplicate type name 'X'/,
+	)
+})
+
+test("buildContentTreeFromSource: throws fast on duplicate declarations in the same scope", () => {
+	assert.throws(
+		() => buildContentGraph("/tmp/file.ts", "type A = string; type A = number;"),
+		/Duplicate type name 'A'/,
+	)
+})
+
 test("buildContentTreeFromSource: returns capture referenced types from body calls", () => {
 	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type A = string; type B<T> = A | T;"))
 
@@ -137,6 +152,34 @@ test("buildContentTreeFromSource: tuple builtin is represented as global pseudo 
 	assert.ok(tupleCall)
 	assert.equal(tupleCall!.type.ref.scope.kind, "global")
 	assert.equal(tupleCall!.type.ref.scope.path, "<global>")
+})
+
+test("buildContentTreeFromSource: readonly tuple is represented as readonly pseudo type", () => {
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type X = readonly [string, number];"))
+	const readonlyTupleCall = [...graph.calls].find(
+		c => c.type.name === "<readonlyTuple>" && c.scope.path === "/tmp/file.ts",
+	)
+	assert.ok(readonlyTupleCall)
+	assert.equal(readonlyTupleCall!.type.ref.scope.kind, "global")
+	assert.equal(readonlyTupleCall!.type.ref.scope.path, "<global>")
+	assert.equal(
+		[...graph.calls].some(c => c.type.name === "<typeOperator>" && c.scope.path === "/tmp/file.ts"),
+		false,
+	)
+})
+
+test("buildContentTreeFromSource: readonly array is represented as readonly pseudo type", () => {
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type X = readonly string[];"))
+	const readonlyArrayCall = [...graph.calls].find(
+		c => c.type.name === "<readonlyArray>" && c.scope.path === "/tmp/file.ts",
+	)
+	assert.ok(readonlyArrayCall)
+	assert.equal(readonlyArrayCall!.type.ref.scope.kind, "global")
+	assert.equal(readonlyArrayCall!.type.ref.scope.path, "<global>")
+	assert.equal(
+		[...graph.calls].some(c => c.type.name === "<typeOperator>" && c.scope.path === "/tmp/file.ts"),
+		false,
+	)
 })
 
 test("buildContentTreeFromSource: builtins and unresolved types are represented in global scope", () => {
@@ -219,6 +262,16 @@ test("buildContentTreeFromSource: object and pair pseudo calls are emitted", () 
 	assert.equal(pseudoNames.has('<"b">'), true)
 	assert.equal(pseudoNames.has("<tuple>"), true)
 	assert.equal(pseudoNames.has("<array>"), false)
+})
+
+test("buildContentTreeFromSource: readonly object property uses readonly pair pseudo", () => {
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type X = { readonly a: string; b: number };"))
+	const readonlyPairCalls = [...graph.calls].filter(c => c.type.name === "<readonlyPair>")
+	const pairCalls = [...graph.calls].filter(c => c.type.name === "<pair>")
+	assert.equal(readonlyPairCalls.length, 1)
+	assert.equal(pairCalls.length, 1)
+	assert.equal(readonlyPairCalls[0]!.arguments[0]!.type.name, '<"a">')
+	assert.equal(pairCalls[0]!.arguments[0]!.type.name, '<"b">')
 })
 
 test("buildContentTreeFromSource: interface and class heritage types are preserved", () => {

@@ -63,6 +63,19 @@ The configured primitive consumer may also be used as the first element of a tup
 
 This allows destructuring a consumer result in a conditional type while forbidding arbitrary nesting.
 
+### User producer invocation rules
+
+For user producers (type aliases with monad input whose terminal returns are `[monad, result]` / `readonly [monad, result]` or `never`), a producer call is only allowed in two places:
+
+- immediate terminal return of another user producer:
+- `type R<M extends Monad> = P<M, "x">`
+- immediate left side of conditional `extends` with tuple destructuring whose first item is `infer ... extends MonadClassFromSettings`:
+- `type R<M extends Monad> = P<M, "x"> extends [infer M2 extends Monad, infer R2] ? ... : ...`
+
+Using a user producer call as a nested generic argument, tuple element, object field, or other wrapped position is a violation.
+
+This is transitive: if one user producer returns another user producer, the caller is treated as a user producer too and gets the same invocation restrictions.
+
 ### Branch-sensitive monad usage
 
 The checker enforces “consume once per branch” for monad values.
@@ -88,6 +101,8 @@ That applies to:
 
 - ordinary generic type calls
 - pseudo type shapes in the content graph such as tuples and indexed access
+
+The callee must declare its first generic parameter as monad-bound (`extends MonadClassFromSettings`).
 
 The one exception is the consumer return shape:
 

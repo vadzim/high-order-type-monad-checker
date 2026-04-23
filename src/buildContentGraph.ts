@@ -176,7 +176,7 @@ class ContentGraphBuilder {
 		}
 		this.graph.types.add(type)
 		const selfRef = this.createTypeRef(type, name, node, scope, true)
-		scope.types.add(selfRef)
+		this.bindTypeRefToScope(scope, selfRef, node, `declaration '${name}'`)
 		if (!(scope.kind === "file" && scope.parent === null)) this.graph.refs.add(selfRef)
 		return type
 	}
@@ -217,7 +217,7 @@ class ContentGraphBuilder {
 				this.externalTypes.set(key, importedType)
 			}
 			const localRef = this.createTypeRef(importedType, localName, node, this.fileScope, true)
-			this.fileScope.types.add(localRef)
+			this.bindTypeRefToScope(this.fileScope, localRef, node, `import '${localName}'`)
 			this.graph.refs.add(localRef)
 		}
 		if (statement.importClause.name)
@@ -307,9 +307,41 @@ class ContentGraphBuilder {
 	}
 
 	private ensureLocalDeclaredType(name: string, node: ts.Node, scope: CGScope, kind: CGParsedTypeKind): CGType {
-		const existing = [...scope.types].find(r => r.name === name && r.scope === scope)?.ref
-		if (existing) return existing
+		const existingRef = [...scope.types].find(r => r.name === name)
+		if (existingRef) {
+			const existing = existingRef.ref
+			const pos = this.createPosition(node)
+			const sameDeclaration =
+				existing.scope === scope &&
+				existing.kind === kind &&
+				existing.position.start === pos.start &&
+				existing.position.end === pos.end
+			if (sameDeclaration) return existing
+			throw this.duplicateNameError(scope, name, node, existingRef.position, `declaration '${name}'`)
+		}
 		return this.createType(name, node, scope, kind)
+	}
+
+	private bindTypeRefToScope(scope: CGScope, ref: CGTypeRef, node: ts.Node, context: string): void {
+		const existing = [...scope.types].find(existingRef => existingRef.name === ref.name)
+		if (existing && existing !== ref) {
+			throw this.duplicateNameError(scope, ref.name, node, existing.position, context)
+		}
+		scope.types.add(ref)
+	}
+
+	private duplicateNameError(
+		scope: CGScope,
+		name: string,
+		node: ts.Node,
+		existingPosition: CGPosition,
+		context: string,
+	): Error {
+		const nextPosition = this.createPosition(node)
+		const scopePath = scope.path || "<unknown>"
+		return new Error(
+			`Duplicate type name '${name}' in scope '${scopePath}' while adding ${context}. Previous at ${existingPosition.start}:${existingPosition.end}, next at ${nextPosition.start}:${nextPosition.end}.`,
+		)
 	}
 
 	private createTypeParameterScope(
@@ -677,9 +709,11 @@ class ContentGraphBuilder {
 				const keyRef = this.getOrCreatePseudoTypeRef(`<${JSON.stringify(memberName)}>`, member.name, scope)
 				const keyCall = this.addCall(keyRef, scope, [], member.name)
 				const valueRoot = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false)
+				const pairTypeName =
+					ts.isPropertySignature(member) && this.hasReadonlyModifier(member) ? "<readonlyPair>" : "<pair>"
 				pairRoots.push(
 					this.addSyntaxPseudoCall(
-						"<pair>",
+						pairTypeName,
 						member.type,
 						scope,
 						ownerType,
@@ -696,6 +730,32 @@ class ContentGraphBuilder {
 			}
 		}
 		return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots, "{")
+	}
+
+	private hasReadonlyModifier(node: ts.Node): boolean {
+		if (!ts.canHaveModifiers(node)) return false
+		return ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ?? false
+	}
+
+	private walkTupleTypeNode(
+		node: ts.TupleTypeNode,
+		scope: CGScope,
+		declarationScope: CGScope,
+		globalScope: CGScope,
+		ownerType: CGType,
+		isReturn: boolean,
+		readonly = false,
+	): CGCall {
+		const tupleRef = this.getOrCreatePseudoTypeRef(readonly ? "<readonlyTuple>" : "<tuple>", node, scope)
+		if (isReturn) ownerType.returns.add(tupleRef)
+		const roots: CGCall[] = []
+		for (const element of node.elements) {
+			if (ts.isTypeNode(element)) {
+				const root = this.walkTypeNode(element, scope, declarationScope, globalScope, ownerType, false)
+				if (root) roots.push(root)
+			}
+		}
+		return this.addCall(tupleRef, scope, roots, node, "[")
 	}
 
 	private walkConditionalTypeNode(
@@ -811,17 +871,8 @@ class ContentGraphBuilder {
 			const literalToken = ts.isLiteralTypeNode(node) ? node.literal.getText(this.sourceFile) : undefined
 			return this.addCall(ref, scope, [], node, literalToken)
 		}
-		if (ts.isTupleTypeNode(node)) {
-			const tupleRef = this.getOrCreatePseudoTypeRef("<tuple>", node, scope)
-			if (isReturn) ownerType.returns.add(tupleRef)
-			const roots: CGCall[] = []
-			for (const element of node.elements)
-				if (ts.isTypeNode(element)) {
-					const root = this.walkTypeNode(element, scope, declarationScope, globalScope, ownerType, false)
-					if (root) roots.push(root)
-				}
-			return this.addCall(tupleRef, scope, roots, node, "[")
-		}
+		if (ts.isTupleTypeNode(node))
+			return this.walkTupleTypeNode(node, scope, declarationScope, globalScope, ownerType, isReturn)
 		if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
 			const roots: CGCall[] = []
 			for (const part of node.types) {
@@ -855,6 +906,37 @@ class ContentGraphBuilder {
 			)
 		}
 		if (ts.isTypeOperatorNode(node)) {
+			if (node.operator === ts.SyntaxKind.ReadonlyKeyword) {
+				if (ts.isTupleTypeNode(node.type))
+					return this.walkTupleTypeNode(
+						node.type,
+						scope,
+						declarationScope,
+						globalScope,
+						ownerType,
+						isReturn,
+						true,
+					)
+				if (ts.isArrayTypeNode(node.type)) {
+					const root = this.walkTypeNode(
+						node.type.elementType,
+						scope,
+						declarationScope,
+						globalScope,
+						ownerType,
+						false,
+					)
+					return this.addSyntaxPseudoCall(
+						"<readonlyArray>",
+						node,
+						scope,
+						ownerType,
+						isReturn,
+						root ? [root] : [],
+						"readonly",
+					)
+				}
+			}
 			const roots: CGCall[] = []
 			ts.forEachChild(node, child => {
 				if (ts.isTypeNode(child)) {

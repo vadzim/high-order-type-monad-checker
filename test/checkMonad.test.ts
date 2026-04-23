@@ -20,7 +20,9 @@ test("checkMonad sample matrix", async (t: import("node:test").TestContext) => {
 					}
 
 		await t.test(`${idx + 1}. ${files.name}`, () => {
-			const sources = new Map(files.modules.map(({ file, source }) => [file, source]))
+			const sources = new Map(
+				files.modules.map(({ file, source }) => [file, 'import { Monad } from "./api.ts";\n' + source]),
+			)
 			sources.set("../samples/api.ts", sharedApiSource)
 
 			const parsed = parseFilesContent(sources, {

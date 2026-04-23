@@ -13,6 +13,7 @@ export type MonadTypeOption = {
 	consumerName: string
 	constructorName: string
 	readerName: string
+	strictMonadModule?: boolean
 }
 
 export type MonadViolation = {
@@ -27,23 +28,43 @@ export type MonadViolation = {
 
 export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption): MonadViolation[] {
 	const violations: MonadViolation[] = []
+	const settingsPath = normalizeTypePath(options.path)
 
 	const monadInfo = new Map(
 		graph.types
 			.values()
-			.filter(t => t.scope.path === options.path && t.kind === "typeAlias")
+			.filter(t => normalizeTypePath(t.scope.path) === settingsPath && t.kind === "typeAlias")
 			.map(t => [t.name, t]),
 	)
 
-	const monadClass = monadInfo.get(options.name) ?? never("Monad class not found")
+	const monadClass = monadInfo.get(options.name)
 
-	const monadConstructor = monadInfo.get(options.constructorName) ?? never("Monad constructor not found")
-	const monadReader = monadInfo.get(options.readerName) ?? never("Monad reader not found")
-	const monadConsumer = monadInfo.get(options.consumerName) ?? never("Monad consumer not found")
+	const monadConstructor = monadInfo.get(options.constructorName)
+	const monadReader = monadInfo.get(options.readerName)
+	const monadConsumer = monadInfo.get(options.consumerName)
+
+	if (options.strictMonadModule) {
+		if (
+			!monadClass?.declaration ||
+			!monadConstructor?.declaration ||
+			!monadReader?.declaration ||
+			!monadConsumer?.declaration
+		)
+			never()
+	}
+
+	if (!monadClass) return []
 
 	const callToOwner = new Map(graph.types.values().flatMap(type => allCallsForType(type).map(call => [call, type])))
 
 	const monadValueTypes = new Set<CGType>()
+
+	if (monadConsumer && !monadConsumer.declaration) {
+		monadValueTypes.add(monadConsumer)
+	}
+	if (monadConstructor && !monadConstructor.declaration) {
+		monadValueTypes.add(monadConstructor)
+	}
 
 	for (const type of graph.types) {
 		for (const [index, arg] of type.arguments.entries()) {
@@ -89,7 +110,8 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 	}
 
-	const consumerTypes = new Set<CGType>([monadConsumer])
+	const consumerTypes = new Set<CGType>()
+	if (monadConsumer) consumerTypes
 	const userMonadInputTypes = new Set(
 		Array.from(graph.types).filter(
 			type => type.kind === "typeAlias" && type !== monadConsumer && type !== monadReader && hasMonadInput(type),
@@ -139,6 +161,20 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 	}
 
+	const userProducerTypes = new Set(Array.from(userMonadInputTypes).filter(type => tupleReturnTypes.has(type)))
+
+	for (const producerType of userProducerTypes) {
+		for (const call of usages(producerType)) {
+			if (isAllowedUserProducerInvocation(call)) continue
+			violations.push({
+				kind: "monad.invalidUsage",
+				message: `Using producer ${producerType.name} here is not allowed. A user producer call must be either the immediate terminal return of another user producer, or the immediate left side of conditional extends with a tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
+				position: call.position,
+				path: call.scope.path,
+			})
+		}
+	}
+
 	for (const monadType of monadValueTypes) {
 		for (const call of usages(monadType)) {
 			if (isIgnoredMonadUsage(call)) continue
@@ -146,10 +182,10 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			if (isAllowedTupleConsumerResultPosition(call)) continue
 			const parent = call.parent
 			if (!parent) continue
-			if (parent.arguments[0] !== call) {
+			if (parent.arguments[0] !== call || !hasMonadInput(parent.type.ref)) {
 				violations.push({
 					kind: "monad.invalidUsage",
-					message: `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of another type, except in [monad, result] consumer returns`,
+					message: `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of a type whose first generic parameter is monad-bound, except in [monad, result] consumer returns`,
 					position: call.position,
 					path: call.scope.path,
 				})
@@ -170,7 +206,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			if (previous) {
 				violations.push({
 					kind: "monad.invalidUsage",
-					message: `Using monad ${call.type.name} here is not allowed, because this branch already consumed it earlier. Only ${monadReader.name} may read the same monad multiple times`,
+					message: `Using monad ${call.type.name} here is not allowed, because this branch already consumed it earlier. Only ${options.readerName} may read the same monad multiple times`,
 					position: call.position,
 					path: call.scope.path,
 					relatedMessage: `The same branch already consumed ${call.type.name} here`,
@@ -190,7 +226,11 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	function isTupleWithMonadResult(call: CGCall): boolean {
-		return call.type.name === "<tuple>" && call.arguments.length === 2 && isMonadValueCall(call.arguments[0]!)
+		return (
+			(call.type.name === "<tuple>" || call.type.name === "<readonlyTuple>") &&
+			call.arguments.length === 2 &&
+			isMonadValueCall(call.arguments[0]!)
+		)
 	}
 
 	function isAllowedConsumerBranch(call: CGCall): boolean {
@@ -206,13 +246,47 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (consumerPassedToUserMonadInputAsFirstArg(call)) return true
 		if (consumerInFirstTupleItemOnConditionalExtendsLeft(call)) return true
 		const owner = callToOwner.get(call)
-		if (owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
+		if (monadConsumer && owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
 		return isTupleWithConfiguredMonadPattern(call.parent.arguments[1] ?? null)
 	}
 
+	function isAllowedUserProducerInvocation(call: CGCall): boolean {
+		if (isProducerReturnedImmediatelyByProducer(call)) return true
+		if (isProducerImmediatelyDestructuredInConditional(call)) return true
+		return false
+	}
+
+	function isProducerReturnedImmediatelyByProducer(call: CGCall): boolean {
+		const owner = callToOwner.get(call)
+		if (!owner || !userProducerTypes.has(owner)) return false
+		return terminalReturns(owner).some(ret => ret === call)
+	}
+
+	function isProducerImmediatelyDestructuredInConditional(call: CGCall): boolean {
+		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
+		if (call.parent.parent?.type.name !== "<conditional>" || call.parent.parent.arguments[0] !== call.parent)
+			return false
+		return isInferMonadTupleDestructurePattern(call.parent.arguments[1] ?? null)
+	}
+
+	function isInferMonadTupleDestructurePattern(call: CGCall | null): boolean {
+		if (!call || !(call.type.name === "<tuple>" || call.type.name === "<readonlyTuple>")) return false
+		if (call.arguments.length < 2) return false
+		const first = call.arguments[0]
+		if (!first || first.type.name !== "<extends>") return false
+		const firstLeft = first.arguments[0]
+		if (!firstLeft || firstLeft.type.name !== "<typeDeclaration>") return false
+		return first.arguments[1]?.type.ref === monadClass
+	}
+
 	function isTupleWithConfiguredMonadPattern(call: CGCall | null): boolean {
-		if (!call || call.type.name !== "<tuple>" || call.arguments.length < 1) return false
+		if (
+			!call ||
+			!(call.type.name === "<tuple>" || call.type.name === "<readonlyTuple>") ||
+			call.arguments.length < 1
+		)
+			return false
 		const head = call.arguments[0]
 		if (!head) return false
 		if (head.type.ref === monadClass) return true
@@ -255,7 +329,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 			if (
 				// consumerCall extends [infer T extends Monad, ...] ? ...
-				call.parent.parent?.type.name === "<tuple>" &&
+				(call.parent.parent?.type.name === "<tuple>" || call.parent.parent?.type.name === "<readonlyTuple>") &&
 				call.parent.parent.arguments[0] === call.parent &&
 				call.parent.parent.parent?.type.name === "<extends>" &&
 				call.parent.parent.parent.arguments[1] === call.parent.parent &&
@@ -279,7 +353,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	function isAllowedTupleConsumerResultPosition(call: CGCall): boolean {
-		if (call.parent?.type.name !== "<tuple>") return false
+		if (!(call.parent?.type.name === "<tuple>" || call.parent?.type.name === "<readonlyTuple>")) return false
 		if (call.parent.arguments[0] !== call) return false
 		const owner = callToOwner.get(call.parent)
 		if (!owner || !(owner === monadConsumer || hasMonadInput(owner))) return false
@@ -288,7 +362,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	function consumerTypeInTupleHead(call: CGCall): boolean {
 		if (call.type.ref !== monadConsumer) return false
-		if (call.parent?.type.name !== "<tuple>") return false
+		if (!(call.parent?.type.name === "<tuple>" || call.parent?.type.name === "<readonlyTuple>")) return false
 		if (call.parent.arguments[0] !== call) return false
 		const owner = callToOwner.get(call.parent)
 		if (!owner || !(owner === monadConsumer || hasMonadInput(owner))) return false
@@ -304,7 +378,11 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	function consumerInFirstTupleItemOnConditionalExtendsLeft(call: CGCall): boolean {
 		if (call.type.ref !== monadConsumer) return false
-		if (call.parent?.type.name !== "<tuple>" || call.parent.arguments[0] !== call) return false
+		if (
+			!(call.parent?.type.name === "<tuple>" || call.parent?.type.name === "<readonlyTuple>") ||
+			call.parent.arguments[0] !== call
+		)
+			return false
 		const extendsCall = call.parent.parent
 		if (!extendsCall || extendsCall.type.name !== "<extends>" || extendsCall.arguments[0] !== call.parent)
 			return false
@@ -312,6 +390,8 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	function hasMonadInput(type: CGType): boolean {
+		if (type === monadConsumer && !monadConsumer.declaration) return true
+		if (type === monadReader && !monadReader.declaration) return true
 		return type.arguments[0]?.extends?.type.ref === monadClass
 	}
 
@@ -337,6 +417,13 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 		return null
 	}
+}
+
+function normalizeTypePath(path: string): string {
+	return path
+		.replaceAll("\\", "/")
+		.replace(/^\.\/+/, "")
+		.replaceAll(/\/+/g, "/")
 }
 
 function usages(type: CGType) {
