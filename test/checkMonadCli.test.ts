@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { runCli } from "../cli/check-monad.ts"
+import { runCli } from "../cli/run-check-monad.ts"
 
 const monadModule = `
 type Monad = { head: string, tail: string }
