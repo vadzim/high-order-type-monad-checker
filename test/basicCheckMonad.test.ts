@@ -5,6 +5,7 @@ import { concatContentGraphs } from "../src/concatContentGraphs.ts"
 import assert from "node:assert/strict"
 import { never } from "../src/utils.ts"
 import { validateContracts } from "./buildContentGraph.test.ts"
+import { monadSamples } from "./checkMonad.samples.ts"
 
 const monadModule = `
 export type Monad = { head: string, tail: string }
@@ -21,16 +22,21 @@ export type MGet2<M extends Monad> = MGet<M>
 `
 
 const fileModule = `
-import type { Monad, MCreate, MRead, MNext, MGet, MGet2 } from "./monad.ts"
+import type { Monad, MCreate, MRead, MNext, MGet, MGet2 } from "./api.ts"
 `
 
-function buildScenarioGraph(fileSource: string, multipleFiles: boolean) {
-	const files = multipleFiles
-		? new Map([
-				["./monad.ts", monadModule],
-				["./file.ts", `${fileModule}\n${fileSource}`],
-			])
-		: new Map([["./monad.ts", `${monadModule}\n${fileSource}`]])
+function buildScenarioGraph(fileSource: string, multipleFilesMode: "same" | "different" | "alone") {
+	const files =
+		multipleFilesMode === "different"
+			? new Map([
+					["./api.ts", monadModule],
+					["./file.ts", `${fileModule}\n${fileSource}`],
+				])
+			: multipleFilesMode === "same"
+				? new Map([["./api.ts", `${monadModule}\n${fileSource}`]])
+				: multipleFilesMode === "alone"
+					? new Map([["./file.ts", `${fileModule}\n${fileSource}`]])
+					: never()
 
 	return {
 		files,
@@ -42,17 +48,18 @@ function buildScenarioGraph(fileSource: string, multipleFiles: boolean) {
 	}
 }
 
-function getScenarioViolations(fileSource: string, multipleFiles: boolean) {
-	const { files, graph } = buildScenarioGraph(fileSource, multipleFiles)
+function getScenarioViolations(fileSource: string, multipleFilesMode: "same" | "different" | "alone") {
+	const { files, graph } = buildScenarioGraph(fileSource, multipleFilesMode)
+
 	const violations = getMonadViolations(graph, {
-		path: "./monad.ts",
+		path: "./api.ts",
 		name: "Monad",
 		constructorName: "MCreate",
 		readerName: "MRead",
 		consumerName: "MNext",
 	})
 
-	return { files, graph, violations }
+	return { files, violations }
 }
 
 function formatViolations(files: Map<string, string>, violations: ReturnType<typeof getMonadViolations>) {
@@ -63,7 +70,7 @@ function formatViolations(files: Map<string, string>, violations: ReturnType<typ
 }
 
 test("checkMonad basic", async (t: import("node:test").TestContext) => {
-	const { files, graph } = buildScenarioGraph("", false)
+	const { files, graph } = buildScenarioGraph("", "same")
 
 	const monadDecls = Array.from(graph.types.values().find(t => t.name === "Monad")?.called ?? []).filter(
 		c => c.parent?.type.name !== "<typeDeclaration>",
@@ -76,7 +83,7 @@ test("checkMonad basic", async (t: import("node:test").TestContext) => {
 	assert.ok(infers.every(c => c.type.name === "<typeDeclaration>"))
 
 	const violations = getMonadViolations(graph, {
-		path: "./monad.ts",
+		path: "./api.ts",
 		name: "Monad",
 		constructorName: "MCreate",
 		readerName: "MRead",
@@ -105,99 +112,105 @@ test("checkMonad basic", async (t: import("node:test").TestContext) => {
 
 test("checkMonad rule matrix", async t => {
 	for (const sample of [
-		{
-			name: "ok: marker is used to declare first generic parameter",
-			source: `type Ok<M extends Monad> = [M, 0];`,
-		},
-		{
-			name: "fail: monad class marker cannot be used as value",
-			source: `type Bad = [Monad, 1];`,
-		},
-		{
-			name: "fail: only first generic parameter may be monad-marked",
-			source: `type Bad<X, M extends Monad> = [M, X];`,
-		},
-		{
-			name: "fail: monad value can only be passed as first generic argument",
-			source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<1, M>;`,
-		},
-		{
-			name: "ok: reader may consume monad multiple times",
-			source: `type Ok<M extends Monad> = [M, [MRead<M>, MRead<M>]];`,
-		},
-		{
-			name: "fail: same branch cannot consume monad twice outside reader",
-			source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<M, M>;`,
-		},
-		{
-			name: "ok: sibling conditional branches may consume separately",
-			source: `type Ok<M extends Monad> = 1 extends 2 ? [M, 0] : [M, 1];`,
-		},
-		{
-			name: "fail: consumer must return consumer shape in all branches",
-			source: `type Bad<M extends Monad> = 1 extends 2 ? [M, 0] : string;`,
-		},
-		{
-			name: "fail: user type with monad input cannot return bare monad",
-			source: `type Bad<M extends Monad> = MNext<M>;`,
-		},
-		{
-			name: "fail: consumer call cannot be wrapped",
-			source: `type Wrap<T> = T; type Bad<M extends Monad> = Wrap<MNext<M>>;`,
-		},
-		{
-			name: "ok: configured consumer may be passed as first arg to monad-input type",
-			source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<MNext<M>>>;`,
-		},
-		{
-			name: "ok: configured consumer may be returned as first item in a tuple",
-			source: `type Ok<M extends Monad> = [MNext<MNext<M>>, 0];`,
-		},
-		{
-			name: "fail: monad cannot be consumed twice in a tuple",
-			source: `type Bad<M extends Monad> = [MNext<M>, MNext<M>];`,
-		},
-		{
-			name: "fail: monad cannot be consumed twice in an object",
-			source: `type Bad<M extends Monad> = { head: MNext<M>, tail: MNext<M> };`,
-		},
-		{
-			name: "ok: monad can be consumed in a conditional infer constraint in a first arg of a tuple",
-			source: `type Ok<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [X, 1] : never;`,
-		},
-		{
-			name: "fail: monad M cannot be consumed in a condition and in its true branch",
-			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [MNext<M>, 1] : never;`,
-		},
-		{
-			name: "fail: monad M cannot be consumed in a condition and in its false branch",
-			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? never : [MNext<M>, 1];`,
-		},
-		{
-			name: "fail: consumer call with direct marker tuple rhs is not allowed",
-			source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
-		},
-		{
-			name: "ok: consumer call may appear on left side of extends with infer constrained by marker",
-			source: `type Ok<M extends Monad> = MNext<M> extends [infer N extends Monad, ...infer _] ? never : never;`,
-		},
-		{
-			name: "fail: consumer call on left side of extends needs tuple rhs",
-			source: `type Bad<M extends Monad> = MNext<M> extends Monad ? never : never;`,
-		},
-	] as const satisfies (
-		| { name: `ok: ${string}`; source: `${string}type Ok${string}` }
-		| { name: `fail: ${string}`; source: `${string}type Bad${string}` }
-	)[]) {
-		for (const multipleFiles of [false, true]) {
-			await t.test(sample.name + (multipleFiles ? " (multiple files)" : " (single file)"), () => {
-				const { files, violations } = getScenarioViolations(sample.source, multipleFiles)
-				if (sample.name.startsWith("ok:")) {
-					assert.deepEqual(violations, [], formatViolations(files, violations).join("\n\n"))
-				} else {
-					assert.ok(violations.length > 0, "Expected at least one violation")
-				}
-			})
+		...([
+			{
+				name: "ok: marker is used to declare first generic parameter",
+				source: `type Ok<M extends Monad> = [M, 0];`,
+			},
+			{
+				name: "fail: monad class marker cannot be used as value",
+				source: `type Bad = [Monad, 1];`,
+			},
+			{
+				name: "fail: only first generic parameter may be monad-marked",
+				source: `type Bad<X, M extends Monad> = [M, X];`,
+			},
+			{
+				name: "fail: monad value can only be passed as first generic argument",
+				source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<1, M>;`,
+			},
+			{
+				name: "ok: reader may consume monad multiple times",
+				source: `type Ok<M extends Monad> = [M, [MRead<M>, MRead<M>]];`,
+			},
+			{
+				name: "fail: same branch cannot consume monad twice outside reader",
+				source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<M, M>;`,
+			},
+			{
+				name: "ok: sibling conditional branches may consume separately",
+				source: `type Ok<M extends Monad> = 1 extends 2 ? [M, 0] : [M, 1];`,
+			},
+			{
+				name: "fail: consumer must return consumer shape in all branches",
+				source: `type Bad<M extends Monad> = 1 extends 2 ? [M, 0] : string;`,
+			},
+			{
+				name: "fail: user type with monad input cannot return bare monad",
+				source: `type Bad<M extends Monad> = MNext<M>;`,
+			},
+			{
+				name: "fail: consumer call cannot be wrapped",
+				source: `type Wrap<T> = T; type Bad<M extends Monad> = Wrap<MNext<M>>;`,
+			},
+			{
+				name: "ok: configured consumer may be passed as first arg to monad-input type",
+				source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<MNext<M>>>;`,
+			},
+			{
+				name: "ok: configured consumer may be returned as first item in a tuple",
+				source: `type Ok<M extends Monad> = [MNext<MNext<M>>, 0];`,
+			},
+			{
+				name: "fail: monad cannot be consumed twice in a tuple",
+				source: `type Bad<M extends Monad> = [MNext<M>, MNext<M>];`,
+			},
+			{
+				name: "fail: monad cannot be consumed twice in an object",
+				source: `type Bad<M extends Monad> = { head: MNext<M>, tail: MNext<M> };`,
+			},
+			{
+				name: "ok: monad can be consumed in a conditional infer constraint in a first arg of a tuple",
+				source: `type Ok<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [X, 1] : never;`,
+			},
+			{
+				name: "fail: monad M cannot be consumed in a condition and in its true branch",
+				source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [MNext<M>, 1] : never;`,
+			},
+			{
+				name: "fail: monad M cannot be consumed in a condition and in its false branch",
+				source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? never : [MNext<M>, 1];`,
+			},
+			{
+				name: "fail: consumer call with direct marker tuple rhs is not allowed",
+				source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
+			},
+			{
+				name: "ok: consumer call may appear on left side of extends with infer constrained by marker",
+				source: `type Ok<M extends Monad> = MNext<M> extends [infer N extends Monad, ...infer _] ? never : never;`,
+			},
+			{
+				name: "fail: consumer call on left side of extends needs tuple rhs",
+				source: `type Bad<M extends Monad> = MNext<M> extends Monad ? never : never;`,
+			},
+		] as const satisfies (
+			| { name: `ok: ${string}`; source: `${string}type Ok${string}` }
+			| { name: `fail: ${string}`; source: `${string}type Bad${string}` }
+		)[]),
+		// ...monadSamples,
+	]) {
+		if ("source" in sample) {
+			for (const multipleFilesMode of ["same", "different"] as const) {
+				await t.test(sample.name + " (" + multipleFilesMode + ")", () => {
+					// console.log(sample.name + " " + multipleFiles)
+					const { files, violations } = getScenarioViolations(sample.source, multipleFilesMode)
+					if (sample.name.startsWith("ok:")) {
+						assert.ok(violations.length === 0, formatViolations(files, violations).join("\n\n"))
+					} else {
+						assert.ok(violations.length > 0, "Expected at least one violation")
+					}
+				})
+			}
 		}
 	}
 })

@@ -6,34 +6,20 @@ import { monadSamples } from "./checkMonad.samples.ts"
 import { parseFilesContent } from "../src/parseContent.ts"
 import { formatViolation } from "../cli/format-violation.ts"
 
-function sampleHeader(source: string): string {
-	return source.split("\n")[0]?.replace("//", "").trim() ?? "unknown"
-}
-
-function sampleText(source: string): string {
-	return source.replace(/^\/\/ .*?\n/, "").trim()
-}
-
 const sharedApiSource = readFileSync(new URL("../samples/api.ts", import.meta.url), "utf8")
 
 test("checkMonad sample matrix", async (t: import("node:test").TestContext) => {
 	for (const [idx, sample] of monadSamples.entries()) {
 		const files =
-			typeof sample === "object" && "modules" in sample
+			"modules" in sample
 				? sample
-				: typeof sample === "string"
-					? {
-							expectedKinds: undefined,
-							test: sampleHeader(sample),
-							modules: [{ source: sampleText(sample), file: "../samples/file.ts" }],
-						}
-					: {
-							expectedKinds: sample.expectedKinds,
-							test: sampleHeader(sample.source),
-							modules: [{ source: sampleText(sample.source), file: sample.file ?? "../samples/file.ts" }],
-						}
+				: {
+						expectedKinds: sample.expectedKinds,
+						name: sample.name,
+						modules: [{ source: sample.source, file: sample.file ?? "../samples/file.ts" }],
+					}
 
-		await t.test(`${idx + 1}. ${files.test}`, () => {
+		await t.test(`${idx + 1}. ${files.name}`, () => {
 			const sources = new Map(files.modules.map(({ file, source }) => [file, source]))
 			sources.set("../samples/api.ts", sharedApiSource)
 
@@ -53,12 +39,12 @@ test("checkMonad sample matrix", async (t: import("node:test").TestContext) => {
 				],
 			})
 
-			const isOk = files.test.startsWith("ok:")
-			const isFail = files.test.startsWith("fail:")
+			const isOk = files.name.startsWith("ok:")
+			const isFail = files.name.startsWith("fail:")
 			assert.equal(isOk || isFail, true, "Sample header must start with ok: or fail:")
 
 			if (violations.length > 0) {
-				console.log(`${idx + 1}. ${files.test}`)
+				console.log(`${idx + 1}. ${files.name}`)
 				for (const violation of violations) {
 					const formatted = formatViolation(
 						violation,
