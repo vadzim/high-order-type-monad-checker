@@ -99,110 +99,90 @@ test("checkMonad rule matrix", async t => {
 		{
 			name: "ok: marker is used to declare first generic parameter",
 			source: `type Ok<M extends Monad> = [M, 0];`,
-			ok: true,
 		},
 		{
 			name: "fail: monad class marker cannot be used as value",
 			source: `type Bad = [Monad, 1];`,
-			ok: false,
 		},
 		{
 			name: "fail: only first generic parameter may be monad-marked",
 			source: `type Bad<X, M extends Monad> = [M, X];`,
-			ok: false,
 		},
 		{
 			name: "fail: monad value can only be passed as first generic argument",
 			source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<1, M>;`,
-			ok: false,
 		},
 		{
 			name: "ok: reader may consume monad multiple times",
 			source: `type Ok<M extends Monad> = [M, [MRead<M>, MRead<M>]];`,
-			ok: true,
 		},
 		{
 			name: "fail: same branch cannot consume monad twice outside reader",
 			source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<M, M>;`,
-			ok: false,
 		},
 		{
 			name: "ok: sibling conditional branches may consume separately",
 			source: `type Ok<M extends Monad> = 1 extends 2 ? [M, 0] : [M, 1];`,
-			ok: true,
 		},
 		{
 			name: "fail: consumer must return consumer shape in all branches",
 			source: `type Bad<M extends Monad> = 1 extends 2 ? [M, 0] : string;`,
-			ok: false,
 		},
 		{
 			name: "fail: user type with monad input cannot return bare monad",
 			source: `type Bad<M extends Monad> = MNext<M>;`,
-			ok: false,
 		},
 		{
 			name: "fail: consumer call cannot be wrapped",
 			source: `type Wrap<T> = T; type Bad<M extends Monad> = Wrap<MNext<M>>;`,
-			ok: false,
 		},
 		{
 			name: "ok: configured consumer may be passed as first arg to monad-input type",
 			source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<MNext<M>>>;`,
-			ok: true,
 		},
 		{
 			name: "ok: configured consumer may be returned as first item in a tuple",
 			source: `type Ok<M extends Monad> = [MNext<MNext<M>>, 0];`,
-			ok: true,
 		},
 		{
 			name: "fail: monad cannot be consumed twice in a tuple",
 			source: `type Bad<M extends Monad> = [MNext<M>, MNext<M>];`,
-			ok: false,
 		},
 		{
 			name: "fail: monad cannot be consumed twice in an object",
 			source: `type Bad<M extends Monad> = { head: MNext<M>, tail: MNext<M> };`,
-			ok: false,
 		},
 		{
 			name: "ok: monad can be consumed in a conditional infer constraint in a first arg of a tuple",
 			source: `type Ok<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [X, 1] : never;`,
-			ok: true,
 		},
 		{
 			name: "fail: monad M cannot be consumed in a condition and in its true branch",
 			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [MNext<M>, 1] : never;`,
-			ok: false,
 		},
 		{
 			name: "fail: monad M cannot be consumed in a condition and in its false branch",
 			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? never : [MNext<M>, 1];`,
-			ok: false,
 		},
 		{
 			name: "fail: consumer call with direct marker tuple rhs is not allowed",
 			source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
-			ok: false,
 		},
 		{
 			name: "ok: consumer call may appear on left side of extends with infer constrained by marker",
 			source: `type Ok<M extends Monad> = MNext<M> extends [infer N extends Monad, ...infer _] ? never : never;`,
-			ok: true,
 		},
 		{
 			name: "fail: consumer call on left side of extends needs tuple rhs",
 			source: `type Bad<M extends Monad> = MNext<M> extends Monad ? never : never;`,
-			ok: false,
 		},
 	] as const satisfies (
-		| { name: `ok: ${string}`; source: `${string}type Ok${string}`; ok: true }
-		| { name: `fail: ${string}`; source: `${string}type Bad${string}`; ok: false }
+		| { name: `ok: ${string}`; source: `${string}type Ok${string}` }
+		| { name: `fail: ${string}`; source: `${string}type Bad${string}` }
 	)[]) {
 		await t.test(sample.name, () => {
 			const { files, violations } = getScenarioViolations(sample.source)
-			if (sample.ok) {
+			if (sample.name.startsWith("ok:")) {
 				assert.deepEqual(violations, [], formatViolations(files, violations).join("\n\n"))
 			} else {
 				assert.ok(violations.length > 0, "Expected at least one violation")
