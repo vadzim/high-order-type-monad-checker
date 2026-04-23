@@ -53,6 +53,7 @@ A consumer call is only allowed in two places:
 - as the terminal return of another consumer branch
 - directly on the left side of a conditional `extends`
 - the configured primitive consumer may also appear as the first element of a terminal `[monad, result]` tuple return
+- the configured primitive consumer may be passed as the first argument to a user type whose first generic parameter is `extends MonadClassFromSettings`
 
 When used on the left side of `extends`, the right side must be a tuple of the form:
 

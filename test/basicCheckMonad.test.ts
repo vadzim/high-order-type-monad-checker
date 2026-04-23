@@ -147,6 +147,11 @@ test("checkMonad rule matrix", async t => {
 			ok: false,
 		},
 		{
+			name: "ok: configured consumer may be passed as first arg to user monad-input type",
+			source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<M>>;`,
+			ok: true,
+		},
+		{
 			name: "fail: consumer call with direct marker tuple rhs is not allowed",
 			source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
 			ok: false,

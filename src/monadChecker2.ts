@@ -201,6 +201,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	function isAllowedConsumerInvocation(call: CGCall): boolean {
 		if (consumerTypeInTupleHead(call)) return true
+		if (consumerPassedToUserMonadInputAsFirstArg(call)) return true
 		const owner = callToOwner.get(call)
 		if (owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
@@ -288,6 +289,14 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const owner = callToOwner.get(call.parent)
 		if (!owner || !(owner === monadConsumer || hasMonadInput(owner))) return false
 		return terminalReturns(owner).some(ret => ret === call.parent)
+	}
+
+	function consumerPassedToUserMonadInputAsFirstArg(call: CGCall): boolean {
+		if (call.type.ref !== monadConsumer) return false
+		if (!call.parent || call.parent.arguments[0] !== call) return false
+		const calleeType = call.parent.type.ref
+		if (calleeType === monadConsumer || calleeType === monadReader) return false
+		return hasMonadInput(calleeType)
 	}
 
 	function hasMonadInput(type: CGType): boolean {
