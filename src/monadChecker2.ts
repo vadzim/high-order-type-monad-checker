@@ -223,6 +223,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	function isIgnoredMonadUsage(call: CGCall): boolean {
 		const owner = callToOwner.get(call)
 		if (owner === monadReader || owner === monadConsumer) return true
+		if (call.type.ref === monadConsumer) return true
 		return call.parent?.type.ref === monadReader
 	}
 
@@ -295,7 +296,6 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (call.type.ref !== monadConsumer) return false
 		if (!call.parent || call.parent.arguments[0] !== call) return false
 		const calleeType = call.parent.type.ref
-		if (calleeType === monadConsumer || calleeType === monadReader) return false
 		return hasMonadInput(calleeType)
 	}
 

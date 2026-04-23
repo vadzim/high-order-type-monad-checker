@@ -147,9 +147,24 @@ test("checkMonad rule matrix", async t => {
 			ok: false,
 		},
 		{
-			name: "ok: configured consumer may be passed as first arg to user monad-input type",
-			source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<M>>;`,
+			name: "ok: configured consumer may be passed as first arg to monad-input type",
+			source: `type Use<M extends Monad> = [M, 0]; type Ok<M extends Monad> = Use<MNext<MNext<M>>>;`,
 			ok: true,
+		},
+		{
+			name: "ok: configured consumer may be returned as first item in a tuple",
+			source: `type Ok<M extends Monad> = [MNext<MNext<M>>, 0];`,
+			ok: true,
+		},
+		{
+			name: "fail: monad cannot be consumed twice in a tuple",
+			source: `type Bad<M extends Monad> = [MNext<M>, MNext<M>];`,
+			ok: false,
+		},
+		{
+			name: "fail: monad cannot be consumed twice in an object",
+			source: `type Bad<M extends Monad> = { head: MNext<M>, tail: MNext<M> };`,
+			ok: false,
 		},
 		{
 			name: "fail: consumer call with direct marker tuple rhs is not allowed",
