@@ -1,7 +1,13 @@
 import type { CGCall, CGScope, CGType, CGTypeRef, ContentGraph } from "./buildContentGraph.ts"
 
 function typeKey(path: string, name: string): string {
-	return `${path}::${name}`
+	return `${normalizeTypePath(path)}::${name}`
+}
+
+function normalizeTypePath(path: string): string {
+	const slashNormalized = path.replaceAll("\\", "/")
+	const withoutDotPrefix = slashNormalized.startsWith("./") ? slashNormalized.slice(2) : slashNormalized
+	return withoutDotPrefix.replaceAll(/\/+/g, "/")
 }
 
 export function concatContentGraphs(input: Iterable<ContentGraph>): ContentGraph {

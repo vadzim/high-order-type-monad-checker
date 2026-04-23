@@ -189,13 +189,15 @@ test("checkMonad rule matrix", async t => {
 		| { name: `ok: ${string}`; source: `${string}type Ok${string}` }
 		| { name: `fail: ${string}`; source: `${string}type Bad${string}` }
 	)[]) {
-		await t.test(sample.name, () => {
-			const { files, violations } = getScenarioViolations(sample.source, false)
-			if (sample.name.startsWith("ok:")) {
-				assert.deepEqual(violations, [], formatViolations(files, violations).join("\n\n"))
-			} else {
-				assert.ok(violations.length > 0, "Expected at least one violation")
-			}
-		})
+		for (const multipleFiles of [false, true]) {
+			await t.test(sample.name + (multipleFiles ? " (multiple files)" : " (single file)"), () => {
+				const { files, violations } = getScenarioViolations(sample.source, multipleFiles)
+				if (sample.name.startsWith("ok:")) {
+					assert.deepEqual(violations, [], formatViolations(files, violations).join("\n\n"))
+				} else {
+					assert.ok(violations.length > 0, "Expected at least one violation")
+				}
+			})
+		}
 	}
 })
