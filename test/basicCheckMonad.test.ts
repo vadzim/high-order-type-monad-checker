@@ -20,8 +20,17 @@ export type MGet<M extends Monad> = [MNext<M>, MRead<M>]
 export type MGet2<M extends Monad> = MGet<M>
 `
 
-function buildScenarioGraph(fileSource: string) {
-	const files = new Map([["./monad.ts", `${monadModule}\n${fileSource}`]])
+const fileModule = `
+import type { Monad, MCreate, MRead, MNext, MGet, MGet2 } from "./monad.ts"
+`
+
+function buildScenarioGraph(fileSource: string, multipleFiles: boolean) {
+	const files = multipleFiles
+		? new Map([
+				["./monad.ts", monadModule],
+				["./file.ts", `${fileModule}\n${fileSource}`],
+			])
+		: new Map([["./monad.ts", `${monadModule}\n${fileSource}`]])
 
 	return {
 		files,
@@ -33,8 +42,8 @@ function buildScenarioGraph(fileSource: string) {
 	}
 }
 
-function getScenarioViolations(fileSource: string) {
-	const { files, graph } = buildScenarioGraph(fileSource)
+function getScenarioViolations(fileSource: string, multipleFiles: boolean) {
+	const { files, graph } = buildScenarioGraph(fileSource, multipleFiles)
 	const violations = getMonadViolations(graph, {
 		path: "./monad.ts",
 		name: "Monad",
@@ -54,7 +63,7 @@ function formatViolations(files: Map<string, string>, violations: ReturnType<typ
 }
 
 test("checkMonad basic", async (t: import("node:test").TestContext) => {
-	const { files, graph } = buildScenarioGraph("")
+	const { files, graph } = buildScenarioGraph("", false)
 
 	const monadDecls = Array.from(graph.types.values().find(t => t.name === "Monad")?.called ?? []).filter(
 		c => c.parent?.type.name !== "<typeDeclaration>",
@@ -181,7 +190,7 @@ test("checkMonad rule matrix", async t => {
 		| { name: `fail: ${string}`; source: `${string}type Bad${string}` }
 	)[]) {
 		await t.test(sample.name, () => {
-			const { files, violations } = getScenarioViolations(sample.source)
+			const { files, violations } = getScenarioViolations(sample.source, false)
 			if (sample.name.startsWith("ok:")) {
 				assert.deepEqual(violations, [], formatViolations(files, violations).join("\n\n"))
 			} else {
