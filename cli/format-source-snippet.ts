@@ -1,5 +1,3 @@
-import type { Position } from "../src/parseContent.ts"
-
 export type SourceHighlight = {
 	/** 1-based line number. */
 	line: number
@@ -215,7 +213,7 @@ function expandTabsInLine(line: string, tabWidth: number): string {
  * Build highlight from UTF-16 offsets (same as TS). If `start`/`end` span newlines, `end` is clipped
  * to the end of the start line.
  */
-export function highlightFromOffsets(source: string, pos: Position): SourceHighlight {
+export function highlightFromOffsets(source: string, pos: OffsetRange): SourceHighlight {
 	const lines = splitLines(source)
 	let offset = 0
 	for (let i = 0; i < lines.length; i++) {

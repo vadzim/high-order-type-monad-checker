@@ -1,4 +1,4 @@
-import type { MonadViolation } from "../src/monadChecker2.ts"
+import type { MonadViolation } from "../src/monadChecker.ts"
 import { formatSourceSnippetFromOffsets, type FormatSourceSnippetOptions } from "./format-source-snippet.ts"
 
 export function formatGraphViolation(

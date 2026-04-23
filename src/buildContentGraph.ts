@@ -1,6 +1,17 @@
 import ts from "typescript"
 import { dirname, join } from "node:path"
 
+export function buildContentGraph(filePath: string, content: string): ContentGraph {
+	return new ContentGraphBuilder(filePath, content).getContentGraph()
+}
+
+export type ContentGraph = {
+	refs: Set<CGTypeRef>
+	types: Set<CGType>
+	scopes: Set<CGScope>
+	calls: Set<CGCall>
+}
+
 export type CGPosition = { start: number; end: number }
 
 export type CGScopeKind =
@@ -64,17 +75,6 @@ export type CGCall = {
 	scope: CGScope
 	arguments: CGCall[]
 	position: CGPosition
-}
-
-export type ContentGraph = {
-	refs: Set<CGTypeRef>
-	types: Set<CGType>
-	scopes: Set<CGScope>
-	calls: Set<CGCall>
-}
-
-export function buildContentGraph(filePath: string, content: string): ContentGraph {
-	return new ContentGraphBuilder(filePath, content).getContentGraph()
 }
 
 class ContentGraphBuilder {

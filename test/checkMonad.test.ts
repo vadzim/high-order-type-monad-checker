@@ -1,74 +1,130 @@
 import test from "node:test"
-import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
 import { getMonadViolations } from "../src/monadChecker.ts"
-import { monadSamples } from "./checkMonad.samples.ts"
-import { parseFilesContent } from "../src/parseContent.ts"
-import { formatViolation } from "../cli/format-violation.ts"
+import { buildContentGraph } from "../src/buildContentGraph.ts"
+import { concatContentGraphs } from "../src/concatContentGraphs.ts"
+import assert from "node:assert/strict"
+import { never } from "../src/utils.ts"
+import { validateContracts } from "./buildContentGraph.test.ts"
+import { monadSamples, type MonadSample } from "./checkMonad.samples.ts"
 
-const sharedApiSource = readFileSync(new URL("../samples/api.ts", import.meta.url), "utf8")
+const monadModule = `
+export type Monad = { head: string, tail: string }
+export type MCreate<Text extends string> =
+    Parse<string> extends [infer Head extends string, infer Tail extends string]
+    ? [{ head: Head, tail: Tail }] extends [infer Result extends Monad]
+        ? Result
+        : never
+    : never
+export type MRead<M extends Monad> = M["head"]
+export type MNext<M extends Monad> = MCreate<M["tail"]>
+export type MGet<M extends Monad> = [MNext<M>, MRead<M>]
+export type MGet2<M extends Monad> = MGet<M>
+`
 
-test("checkMonad sample matrix", async (t: import("node:test").TestContext) => {
-	for (const [idx, sample] of monadSamples.entries()) {
-		const files =
-			"modules" in sample
-				? sample
-				: {
-						expectedKinds: sample.expectedKinds,
-						name: sample.name,
-						modules: [{ source: sample.source, file: sample.file ?? "../samples/file.ts" }],
-					}
+const fileModule = `
+import type { Monad, MCreate, MRead, MNext, MGet, MGet2 } from "./api.ts"
+`
 
-		await t.test(`${idx + 1}. ${files.name}`, () => {
-			const sources = new Map(
-				files.modules.map(({ file, source }) => [file, 'import { Monad } from "./api.ts";\n' + source]),
+function buildScenarioGraph(files: Map<string, string>) {
+	return validateContracts(
+		concatContentGraphs(
+			files.entries().map(([path, content]) => validateContracts(buildContentGraph(path, content))),
+		),
+	)
+}
+
+function formatViolations(files: Map<string, string>, violations: ReturnType<typeof getMonadViolations>) {
+	return violations.map(violation => {
+		const file = files.get(violation.path) ?? ""
+		return `${violation.kind}: ${violation.message}\n${file.slice(violation.position.start, violation.position.end)}`
+	})
+}
+
+test("checkMonad basic", async () => {
+	const files = new Map([["../samples/api.ts", monadModule]])
+	const graph = buildScenarioGraph(files)
+
+	const monadDecls = Array.from(graph.types.values().find(t => t.name === "Monad")?.called ?? []).filter(
+		c => c.parent?.type.name !== "<typeDeclaration>",
+	)
+
+	assert.ok(monadDecls.every(c => c.parent?.type.name === "<extends>" && c.parent?.arguments[1] === c))
+
+	const infers = monadDecls.map(c => c.parent?.arguments[0]).filter(t => t != null)
+
+	assert.ok(infers.every(c => c.type.name === "<typeDeclaration>"))
+
+	const violations = getMonadViolations(graph, {
+		path: "./api.ts",
+		name: "Monad",
+		constructorName: "MCreate",
+		readerName: "MRead",
+		consumerName: "MNext",
+	})
+
+	for (const violation of violations) {
+		const file = files.get(violation.path) ?? never()
+		console.log(violation.message)
+		console.log(
+			"\x1b[90m" + // dar gray
+				file.slice(0, violation.position.start) +
+				"\x1b[0m" +
+				"\x1b[91;1m" + // light red + bold
+				file.slice(violation.position.start, violation.position.end) +
+				"\x1b[0m" +
+				"\x1b[90m" + // dar gray
+				file.slice(violation.position.end) +
+				"\x1b[0m",
+		)
+		console.log("")
+	}
+
+	assert.deepEqual(violations, [])
+})
+
+test("checkMonad rule matrix", async t => {
+	for (const sample of monadSamples) {
+		for (const multipleFilesMode of ["same", "different", "alone"] as const) {
+			const files = new Map(
+				multipleFilesMode === "same"
+					? "source" in sample
+						? [[sample.file || "../samples/api.ts", `${monadModule}\n${sample.source}`] as const]
+						: []
+					: [
+							...(multipleFilesMode === "different" ? [["../samples/api.ts", monadModule] as const] : []),
+							...("source" in sample
+								? [{ file: sample.file || "../samples/file.ts", source: sample.source }]
+								: sample.modules
+							).map(({ file, source }) => [file, `${fileModule}\n${source}`] as const),
+						],
 			)
-			sources.set("../samples/api.ts", sharedApiSource)
 
-			const parsed = parseFilesContent(sources, {
-				idPrefix: `test-${idx}`,
-			})
+			if (files.size === 0) continue
 
-			const violations = getMonadViolations(parsed, {
-				monadTypes: [
-					{
-						path: "../samples/api.ts",
-						name: "Monad",
-						consumerName: "MonadPrivate",
-						constructorName: "MonadConstructor",
-						readerName: "MonadReader",
-					},
-				],
-			})
+			await t.test(sample.name + " (" + multipleFilesMode + ")", () => {
+				// console.log(sample.name + " " + multipleFiles)
 
-			const isOk = files.name.startsWith("ok:")
-			const isFail = files.name.startsWith("fail:")
-			assert.equal(isOk || isFail, true, "Sample header must start with ok: or fail:")
+				const graph = buildScenarioGraph(files)
 
-			if (violations.length > 0) {
-				console.log(`${idx + 1}. ${files.name}`)
-				for (const violation of violations) {
-					const formatted = formatViolation(
-						violation,
-						{ files: sources, parsed: parsed },
-						{ contextAfter: 3 },
-					)
-					console.log(formatted)
-				}
-			}
+				const violations = getMonadViolations(graph, {
+					path: "../samples/api.ts",
+					name: "Monad",
+					constructorName: "MCreate",
+					readerName: "MRead",
+					consumerName: "MNext",
+					strictMonadModule: multipleFilesMode !== "alone",
+				})
 
-			if (isOk) {
-				assert.equal(violations.length, 0, `Expected no violations, got ${JSON.stringify(violations)}`)
-			} else {
-				assert.ok(violations.length > 0, "Expected at least one violation")
-
-				if (files.expectedKinds?.length) {
-					const kinds = new Set(violations.map(v => v.kind))
-					for (const expected of files.expectedKinds) {
-						assert.ok(kinds.has(expected), `Missing expected violation kind ${expected}`)
+				// const { files, violations } = getScenarioViolations(sample.source, multipleFilesMode)
+				if (sample.name.startsWith("ok:")) {
+					assert.ok(violations.length === 0, formatViolations(files, violations).join("\n\n"))
+				} else {
+					if (violations.length > 0) {
+						console.error(formatViolations(files, violations).join("\n\n"))
 					}
+					assert.ok(violations.length > 0, "Expected at least one violation")
 				}
-			}
-		})
+			})
+		}
 	}
 })

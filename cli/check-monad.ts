@@ -6,7 +6,7 @@ import fg from "fast-glob"
 import { readFile } from "node:fs/promises"
 import { buildContentGraph } from "../src/buildContentGraph.ts"
 import { concatContentGraphs } from "../src/concatContentGraphs.ts"
-import { getMonadViolations, type MonadTypeOption } from "../src/monadChecker2.ts"
+import { getMonadViolations, type MonadTypeOption } from "../src/monadChecker.ts"
 import { formatGraphViolation } from "./format-graph-violation.ts"
 import type { FormatSourceSnippetOptions } from "./format-source-snippet.ts"
 
