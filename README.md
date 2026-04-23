@@ -59,6 +59,8 @@ When used on the left side of `extends`, the right side must be a tuple of the f
 
 - `[infer T extends MonadClassFromSettings, ...]`
 
+The configured primitive consumer may also be used as the first element of a tuple on the left side of `extends` in a conditional, when that `extends` right side uses the same monad tuple pattern.
+
 This allows destructuring a consumer result in a conditional type while forbidding arbitrary nesting.
 
 ### Branch-sensitive monad usage
@@ -76,6 +78,7 @@ That means sibling conditional branches are independent:
 
 - using the same monad once in the true branch and once in the false branch is allowed
 - using it twice in the same branch path is a violation
+- consuming in the conditional condition and then again in either branch is also a violation
 
 ### Generic argument position rule
 

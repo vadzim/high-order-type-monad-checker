@@ -163,7 +163,9 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		for (const call of calls) {
 			if (isIgnoredMonadUsage(call)) continue
 			const previous = seenInBranch.find(
-				prev => prev.type.ref === call.type.ref && scopeContains(prev.scope, call.scope),
+				prev =>
+					prev.type.ref === call.type.ref &&
+					(scopeContains(prev.scope, call.scope) || sharesConditionalConditionPath(prev, call)),
 			)
 			if (previous) {
 				violations.push({
@@ -202,6 +204,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	function isAllowedConsumerInvocation(call: CGCall): boolean {
 		if (consumerTypeInTupleHead(call)) return true
 		if (consumerPassedToUserMonadInputAsFirstArg(call)) return true
+		if (consumerInFirstTupleItemOnConditionalExtendsLeft(call)) return true
 		const owner = callToOwner.get(call)
 		if (owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
@@ -209,7 +212,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	function isTupleWithConfiguredMonadPattern(call: CGCall | null): boolean {
-		if (!call || call.type.name !== "<tuple>" || call.arguments.length !== 2) return false
+		if (!call || call.type.name !== "<tuple>" || call.arguments.length < 1) return false
 		const head = call.arguments[0]
 		if (!head) return false
 		if (head.type.ref === monadClass) return true
@@ -299,8 +302,40 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		return hasMonadInput(calleeType)
 	}
 
+	function consumerInFirstTupleItemOnConditionalExtendsLeft(call: CGCall): boolean {
+		if (call.type.ref !== monadConsumer) return false
+		if (call.parent?.type.name !== "<tuple>" || call.parent.arguments[0] !== call) return false
+		const extendsCall = call.parent.parent
+		if (!extendsCall || extendsCall.type.name !== "<extends>" || extendsCall.arguments[0] !== call.parent)
+			return false
+		return isTupleWithConfiguredMonadPattern(extendsCall.arguments[1] ?? null)
+	}
+
 	function hasMonadInput(type: CGType): boolean {
 		return type.arguments[0]?.extends?.type.ref === monadClass
+	}
+
+	function sharesConditionalConditionPath(left: CGCall, right: CGCall): boolean {
+		const leftSlot = nearestConditionalSlot(left)
+		const rightSlot = nearestConditionalSlot(right)
+		if (!leftSlot || !rightSlot) return false
+		if (leftSlot.conditional !== rightSlot.conditional) return false
+		return (
+			(leftSlot.slot === 0 && (rightSlot.slot === 1 || rightSlot.slot === 2)) ||
+			(rightSlot.slot === 0 && (leftSlot.slot === 1 || leftSlot.slot === 2))
+		)
+	}
+
+	function nearestConditionalSlot(call: CGCall): { conditional: CGCall; slot: number } | null {
+		let current: CGCall | null = call
+		while (current?.parent) {
+			if (current.parent.type.name === "<conditional>") {
+				const slot = current.parent.arguments.indexOf(current)
+				return slot < 0 ? null : { conditional: current.parent, slot }
+			}
+			current = current.parent
+		}
+		return null
 	}
 }
 

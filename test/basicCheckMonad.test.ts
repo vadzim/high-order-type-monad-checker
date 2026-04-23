@@ -167,6 +167,21 @@ test("checkMonad rule matrix", async t => {
 			ok: false,
 		},
 		{
+			name: "ok: monad can be consumed in a conditional infer constraint in a first arg of a tuple",
+			source: `type Ok<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [X, 1] : never;`,
+			ok: true,
+		},
+		{
+			name: "fail: monad M cannot be consumed in a condition and in its true branch",
+			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [MNext<M>, 1] : never;`,
+			ok: false,
+		},
+		{
+			name: "fail: monad M cannot be consumed in a condition and in its false branch",
+			source: `type Bad<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? never : [MNext<M>, 1];`,
+			ok: false,
+		},
+		{
 			name: "fail: consumer call with direct marker tuple rhs is not allowed",
 			source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
 			ok: false,
@@ -181,7 +196,10 @@ test("checkMonad rule matrix", async t => {
 			source: `type Bad<M extends Monad> = MNext<M> extends Monad ? never : never;`,
 			ok: false,
 		},
-	] as const) {
+	] as const satisfies (
+		| { name: `ok: ${string}`; source: `${string}type Ok${string}`; ok: true }
+		| { name: `fail: ${string}`; source: `${string}type Bad${string}`; ok: false }
+	)[]) {
 		await t.test(sample.name, () => {
 			const { files, violations } = getScenarioViolations(sample.source)
 			if (sample.ok) {
