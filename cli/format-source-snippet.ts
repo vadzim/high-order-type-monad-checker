@@ -134,10 +134,10 @@ function formatSourceSnippet(
 		if (i === lineIndex) {
 			const anchorText =
 				" ".repeat(expandTabsInLine(lineText.slice(0, anchor.startPos), tabWidth).length) +
-				(color ? ansi.lightRed : "") +
+				(color && ansi.lightRed) +
 				"~".repeat(anchor.textLength) +
-				(color ? ansi.reset : "")
-			out.push(" ".repeat(gutterW) + " | " + anchorText)
+				(color && ansi.reset)
+			out.push(blankGutter(gutterW, color) + anchorText)
 		}
 	}
 
@@ -150,8 +150,8 @@ const ansi = {
 	lightRed: "\x1b[91m",
 } as const
 
-function useAnsi(options?: FormatSourceSnippetOptions): boolean {
-	if (options?.noColor) return false
+function useAnsi(options?: FormatSourceSnippetOptions): "" | true {
+	if (options?.noColor) return ""
 	return true
 }
 
@@ -161,19 +161,16 @@ function gutterWidthForRange(startLine: number, endLine: number): number {
 	return result
 }
 
-function formatGutterLine(lineNo: number, gutterW: number, sourceText: string, color: boolean): string {
+function formatGutterLine(lineNo: number, gutterW: number, sourceText: string, color: "" | true): string {
 	const padded = String(lineNo).padStart(gutterW, " ")
-	const num = color ? `${ansi.reverse}${padded}${ansi.reset}` : padded
+	const num = `${color && ansi.reverse}${padded}${color && ansi.reset}`
 	if (!sourceText) return `${num} |`
 	return `${num} | ${sourceText}`
 }
 
-function blankGutter(gutterW: number, color: boolean): string {
-	if (color) {
-		const padded = " ".repeat(gutterW)
-		return `${ansi.reverse}${padded}${ansi.reset} | `
-	}
-	return `${" ".repeat(gutterW)} | `
+function blankGutter(gutterW: number, color: "" | true): string {
+	const padded = " ".repeat(gutterW)
+	return `${color && ansi.reverse}${padded}${color && ansi.reset} | `
 }
 
 /** Visual column (0-based) after processing `line[0..end)`; tabs advance to tab stops. */
