@@ -9,7 +9,7 @@ const monadModule = `
 type Monad = { head: string, tail: string }
 type MCreate<Text extends string> =
 	Parse<string> extends [infer Head extends string, infer Tail extends string]
-		? { head: Head, tail: Tail } extends infer Result extends Monad
+		? [{ head: Head, tail: Tail }] extends [infer Result extends Monad]
 			? Result
 			: never
 		: never

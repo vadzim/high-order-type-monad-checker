@@ -10,7 +10,7 @@ const monadModule = `
 export type Monad = { head: string, tail: string }
 export type MCreate<Text extends string> =
     Parse<string> extends [infer Head extends string, infer Tail extends string]
-    ? { head: Head, tail: Tail } extends infer Result extends Monad
+    ? [{ head: Head, tail: Tail }] extends [infer Result extends Monad]
         ? Result
         : never
     : never
@@ -147,8 +147,13 @@ test("checkMonad rule matrix", async t => {
 			ok: false,
 		},
 		{
-			name: "ok: consumer call may appear on left side of extends with tuple rhs",
-			source: `type Ok<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
+			name: "fail: consumer call with direct marker tuple rhs is not allowed",
+			source: `type Bad<M extends Monad> = MNext<M> extends [Monad, infer R] ? never : never;`,
+			ok: false,
+		},
+		{
+			name: "ok: consumer call may appear on left side of extends with infer constrained by marker",
+			source: `type Ok<M extends Monad> = MNext<M> extends [infer N extends Monad, ...infer _] ? never : never;`,
 			ok: true,
 		},
 		{

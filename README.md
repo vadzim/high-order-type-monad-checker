@@ -59,7 +59,7 @@ A consumer call is only allowed in two places:
 
 When used on the left side of `extends`, the right side must be a tuple of the form:
 
-- `[MonadClassFromSettings, result]`
+- `[infer T extends MonadClassFromSettings, ...]`
 
 This allows destructuring a consumer result in a conditional type while forbidding arbitrary nesting.
 

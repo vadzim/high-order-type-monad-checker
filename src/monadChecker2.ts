@@ -64,7 +64,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (!isAllowedMonadClassMarkerUse(call)) {
 			violations.push({
 				kind: "monad.invalidUsage",
-				message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration`,
+				message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration either immediately or as the first item of a tuple`,
 				position: call.position,
 				path: call.scope.path,
 			})
@@ -202,15 +202,18 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const owner = callToOwner.get(call)
 		if (owner && consumerTypes.has(owner) && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
-		return isTupleWithConfiguredMonad(call.parent.arguments[1] ?? null)
+		return isTupleWithConfiguredMonadPattern(call.parent.arguments[1] ?? null)
 	}
 
-	function isTupleWithConfiguredMonad(call: CGCall | null): boolean {
+	function isTupleWithConfiguredMonadPattern(call: CGCall | null): boolean {
+		if (!call || call.type.name !== "<tuple>" || call.arguments.length !== 2) return false
+		const head = call.arguments[0]
+		if (!head) return false
+		if (head.type.ref === monadClass) return true
 		return (
-			!!call &&
-			call.type.name === "<tuple>" &&
-			call.arguments.length === 2 &&
-			call.arguments[0]?.type.ref === monadClass
+			head.type.name === "<extends>" &&
+			head.arguments[1]?.type.ref === monadClass &&
+			head.arguments[0]?.type.name === "<typeDeclaration>"
 		)
 	}
 
@@ -222,14 +225,41 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	function isAllowedMonadClassMarkerUse(call: CGCall): boolean {
 		if (
+			// [infer] T extends Monad
 			call.parent?.type.name === "<extends>" &&
 			call.parent.arguments[1] === call &&
 			call.parent.arguments[0]?.type.name === "<typeDeclaration>"
 		) {
-			return true
+			if (
+				// infer T extends Monad ? ...
+				call.parent.parent?.type.name === "<conditional>" &&
+				call.parent.parent.arguments[0] === call.parent
+			) {
+				return true
+			}
+
+			if (
+				// type X<T extends Monad, ...> =
+				call.parent.parent?.type.name === "<typeDeclaration>" &&
+				call.parent.parent.arguments[2] === call.parent
+			) {
+				return true
+			}
+
+			if (
+				// consumerCall extends [infer T extends Monad, ...] ? ...
+				call.parent.parent?.type.name === "<tuple>" &&
+				call.parent.parent.arguments[0] === call.parent &&
+				call.parent.parent.parent?.type.name === "<extends>" &&
+				call.parent.parent.parent.arguments[1] === call.parent.parent &&
+				call.parent.parent.parent.parent?.type.name === "<conditional>" &&
+				call.parent.parent.parent.parent.arguments[0] === call.parent.parent.parent
+			) {
+				return true
+			}
 		}
-		if (call.parent?.type.name !== "<tuple>" || call.parent.arguments[0] !== call) return false
-		return call.parent.parent?.type.name === "<extends>" && call.parent.parent.arguments[1] === call.parent
+
+		return false
 	}
 
 	function isMonadArgumentUsage(call: CGCall): boolean {
