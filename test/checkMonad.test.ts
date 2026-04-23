@@ -112,6 +112,8 @@ test("checkMonad rule matrix", async t => {
 
 				const formattedViolations = violations
 					.map(violation => formatGraphViolation(violation, files, { contextBefore: 7, contextAfter: 5 }))
+					.filter(s => s != null)
+					.map(s => s.trim())
 					.join("\n\n")
 
 				// const { files, violations } = getScenarioViolations(sample.source, multipleFilesMode)
@@ -119,7 +121,7 @@ test("checkMonad rule matrix", async t => {
 					assert.ok(violations.length === 0, formattedViolations)
 				} else {
 					if (formattedViolations && multipleFilesMode === "different") {
-						console.error(formattedViolations)
+						console.error(formattedViolations + "\n")
 					}
 					assert.ok(violations.length > 0, "Expected at least one violation")
 					if (sample.expectedKinds) {

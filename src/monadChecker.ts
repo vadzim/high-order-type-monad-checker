@@ -116,7 +116,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 				owner: callToOwner.get(call) ?? null,
 				violation: {
 					kind: "monad.invalidMarkerUsage",
-					message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may only appear on the right side of extends in a declaration either immediately or as the first item of a tuple`,
+					message: `Using ${call.type.name} here is not allowed, because ${call.type.name} is only a marker type. It may be used only as an extends-constraint target (for example, T extends ${call.type.name}, including [infer T extends ${call.type.name}, ...]) and not as a standalone value type`,
 					position: call.position,
 					path: call.scope.path,
 					related: related({
@@ -213,7 +213,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 				owner: callToOwner.get(call) ?? consumerType,
 				violation: {
 					kind: "monad.invalidConsumerInvocation",
-					message: `Using consumer ${consumerType.name} here is not allowed. It must be either in terminal return position of another consumer, or as the immediate left side of extends with a right side like [${monadClass.name}, result]`,
+					message: `Using consumer ${consumerType.name} here is not allowed. It must be either in terminal return position of another consumer, or as the immediate left side of extends with a tuple pattern on the right side like [infer ... extends ${monadClass.name}, result]`,
 					position: call.position,
 					path: call.scope.path,
 					related: related({
@@ -231,6 +231,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	for (const producerType of userProducerTypes) {
 		for (const call of usages(producerType)) {
 			if (isProducerConditionalPatternError(call)) {
+				const wrongPattern = call.parent?.arguments[1]
 				violations.push({
 					owner: callToOwner.get(call) ?? producerType,
 					violation: {
@@ -238,11 +239,18 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 						message: `Using producer ${producerType.name} here is not allowed, because conditional destructuring must use a right-side tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
 						position: call.position,
 						path: call.scope.path,
-						related: related({
-							message: `${producerType.name} is declared here`,
-							position: producerType.position,
-							path: producerType.scope.path,
-						}),
+						related: related(
+							{
+								message: `${producerType.name} is declared here`,
+								position: producerType.position,
+								path: producerType.scope.path,
+							},
+							{
+								message: "Wrong destructuring pattern is here",
+								position: wrongPattern?.position,
+								path: wrongPattern?.scope.path,
+							},
+						),
 					},
 				})
 				continue
@@ -389,9 +397,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 						ownerMessages.some(
 							v =>
 								v.kind === "monad.invalidMonadUsageContext" &&
-								v.message.includes(
-									"passed as the first argument of a type whose first generic parameter is monad-bound",
-								),
+								v.message.includes("first generic parameter is monad-bound"),
 						)
 					) {
 						return false
@@ -482,7 +488,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (parent.type.name === "<object>" || parent.type.name === "<pair>" || parent.type.name === "<readonlyPair>") {
 			return `Using monad ${call.type.name} here is not allowed, because object wrappers cannot consume monad values`
 		}
-		return `Using monad ${call.type.name} here is not allowed, because a monad may only be passed as the first argument of a type whose first generic parameter is monad-bound, except in [monad, result] consumer returns`
+		return `Using monad ${call.type.name} here is not allowed. Allowed forms are: (1) pass it as the first argument of a type whose first generic parameter is monad-bound; (2) return it as the first item of a [monad, result] tuple`
 	}
 
 	function monadArgumentUsageKind(parent: CGCall): string {
