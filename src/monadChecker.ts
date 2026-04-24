@@ -219,38 +219,36 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	const tupleReturnTypes = new Set<CGType>()
 	const typeAliases = new Set(Array.from(graph.types).filter(type => type.kind === "typeAlias"))
 	const terminalReturnsByType = new Map(Array.from(typeAliases).map(type => [type, terminalReturns(type)] as const))
-	const returnTypeEdges = new Map<CGType, Set<CGType>>(
-		Array.from(typeAliases).map(type => [
-			type,
-			new Set(
-				terminalReturnsByType
-					.get(type)!
-					.flatMap(branch => (typeAliases.has(branch.type.ref) ? [branch.type.ref] : [])),
-			),
-		]),
-	)
-	const returnTypeComponents = stronglyConnectedComponents(
-		typeAliases,
-		type => returnTypeEdges.get(type) ?? new Set(),
-	)
+	const recursionComponents: Set<CGType>[] = []
+	const seenRecursionSets = new Set<Set<CGType>>()
+	for (const type of typeAliases) {
+		const recursion = type.recursion
+		if (!recursion || seenRecursionSets.has(recursion)) continue
+		seenRecursionSets.add(recursion)
+		const component = new Set(Array.from(recursion).filter(member => typeAliases.has(member)))
+		if (component.size > 0) recursionComponents.push(component)
+	}
+	for (const type of typeAliases) {
+		if (recursionComponents.some(component => component.has(type))) continue
+		recursionComponents.push(new Set([type]))
+	}
 
 	changed = true
 	while (changed) {
 		changed = false
-		for (const component of returnTypeComponents) {
-			if (component.every(type => tupleReturnTypes.has(type))) continue
-			const componentSet = new Set(component)
-			if (component.some(type => terminalReturnsByType.get(type)!.length === 0)) continue
+		for (const componentSet of recursionComponents) {
+			if (Array.from(componentSet).every(type => tupleReturnTypes.has(type))) continue
+			if (Array.from(componentSet).some(type => terminalReturnsByType.get(type)!.length === 0)) continue
 			const recursiveComponent =
-				component.length > 1 || component.some(type => returnTypeEdges.get(type)?.has(type) === true)
-			const allBranchesAllowed = component.every(type =>
+				componentSet.size > 1 || Array.from(componentSet).some(type => type.recursion?.has(type) === true)
+			const allBranchesAllowed = Array.from(componentSet).every(type =>
 				terminalReturnsByType
 					.get(type)!
 					.every(branch => isAllowedConsumerBranchInComponent(branch, componentSet)),
 			)
 			if (!allBranchesAllowed) continue
 			if (recursiveComponent && !hasNonRecursiveReturn(componentSet)) continue
-			for (const type of component) {
+			for (const type of componentSet) {
 				if (tupleReturnTypes.has(type)) continue
 				tupleReturnTypes.add(type)
 				changed = true
@@ -890,49 +888,4 @@ function compareCalls(left: CGCall, right: CGCall): number {
 	if (left.scope.path !== right.scope.path) return left.scope.path.localeCompare(right.scope.path)
 	if (left.position.start !== right.position.start) return left.position.start - right.position.start
 	return left.position.end - right.position.end
-}
-
-function stronglyConnectedComponents<T>(nodes: Iterable<T>, edges: (node: T) => Iterable<T>): T[][] {
-	let index = 0
-	const indices = new Map<T, number>()
-	const lowLinks = new Map<T, number>()
-	const stack: T[] = []
-	const onStack = new Set<T>()
-	const components: T[][] = []
-
-	function visit(node: T): void {
-		indices.set(node, index)
-		lowLinks.set(node, index)
-		index += 1
-		stack.push(node)
-		onStack.add(node)
-
-		for (const next of edges(node)) {
-			if (!indices.has(next)) {
-				visit(next)
-				lowLinks.set(node, Math.min(lowLinks.get(node)!, lowLinks.get(next)!))
-				continue
-			}
-			if (onStack.has(next)) {
-				lowLinks.set(node, Math.min(lowLinks.get(node)!, indices.get(next)!))
-			}
-		}
-
-		if (lowLinks.get(node) !== indices.get(node)) return
-		const component: T[] = []
-		while (stack.length > 0) {
-			const member = stack.pop()!
-			onStack.delete(member)
-			component.push(member)
-			if (member === node) break
-		}
-		components.push(component)
-	}
-
-	for (const node of nodes) {
-		if (indices.has(node)) continue
-		visit(node)
-	}
-
-	return components
 }

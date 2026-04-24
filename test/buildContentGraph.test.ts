@@ -375,6 +375,32 @@ test("buildContentTreeFromSource: unconstrained type and infer params normalize 
 	assert.equal(inferExtendsCall!.arguments[1]!.type.name, "unknown")
 })
 
+test("buildContentTreeFromSource: self recursion points to a shared one-item recursion set", () => {
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type A<T> = A<T>;"))
+	const aType = [...graph.types].find(type => type.name === "A" && type.scope.path === "/tmp/file.ts")
+	assert.ok(aType)
+	assert.ok(aType!.recursion)
+	assert.equal(aType!.recursion!.size, 1)
+	assert.equal(aType!.recursion!.has(aType!), true)
+})
+
+test("buildContentTreeFromSource: mutual recursion shares the same recursion set object", () => {
+	const graph = validateContracts(buildContentGraph("/tmp/file.ts", "type A = B; type B = A; type C = string;"))
+	const aType = [...graph.types].find(type => type.name === "A" && type.scope.path === "/tmp/file.ts")
+	const bType = [...graph.types].find(type => type.name === "B" && type.scope.path === "/tmp/file.ts")
+	const cType = [...graph.types].find(type => type.name === "C" && type.scope.path === "/tmp/file.ts")
+	assert.ok(aType)
+	assert.ok(bType)
+	assert.ok(cType)
+	assert.ok(aType!.recursion)
+	assert.ok(bType!.recursion)
+	assert.equal(aType!.recursion, bType!.recursion)
+	assert.equal(aType!.recursion!.size, 2)
+	assert.equal(aType!.recursion!.has(aType!), true)
+	assert.equal(aType!.recursion!.has(bType!), true)
+	assert.equal(cType!.recursion, undefined)
+})
+
 export function validateContracts(graph: ContentGraph) {
 	assert.deepEqual(new Set(graph.refs.values().map(r => r.ref)), graph.types)
 	assert.deepEqual(new Set(graph.types.values().flatMap(r => r.refs)), graph.refs)

@@ -51,6 +51,7 @@ export type CGType = {
 	returnedBy: Set<CGTypeRef>
 	returns: Set<CGTypeRef>
 	refs: Set<CGTypeRef> // all the refs in which ref is equal to this type
+	recursion?: Set<CGType>
 }
 
 export type CGTypeRef = {
@@ -111,6 +112,7 @@ class ContentGraphBuilder {
 			for (const returnedRef of type.returns) returnedRef.ref.returnedBy.add(declRef)
 		}
 		this.rebuildCallIndexes()
+		this.rebuildRecursionSets()
 		return this.graph
 	}
 
@@ -989,4 +991,82 @@ class ContentGraphBuilder {
 			call.type.ref.called.add(call)
 		}
 	}
+
+	private rebuildRecursionSets(): void {
+		for (const type of this.graph.types) delete type.recursion
+
+		const nodes = Array.from(this.graph.types).filter(
+			type =>
+				(type.kind === "typeAlias" || type.kind === "interface" || type.kind === "class") && type.body !== null,
+		)
+		const nodeSet = new Set(nodes)
+		const edges = new Map(
+			nodes.map(type => [
+				type,
+				new Set(
+					Array.from(this.walkCalls(type.body)).flatMap(call =>
+						nodeSet.has(call.type.ref) ? [call.type.ref] : [],
+					),
+				),
+			]),
+		)
+		const components = stronglyConnectedComponents(nodes, type => edges.get(type) ?? new Set())
+		for (const component of components) {
+			const recursive = component.length > 1 || component.some(type => edges.get(type)?.has(type) === true)
+			if (!recursive) continue
+			const recursionSet = new Set(component)
+			for (const type of component) type.recursion = recursionSet
+		}
+	}
+
+	private *walkCalls(call: CGCall | null): Generator<CGCall> {
+		if (!call) return
+		yield call
+		for (const argument of call.arguments) yield* this.walkCalls(argument)
+	}
+}
+
+function stronglyConnectedComponents<T>(nodes: Iterable<T>, edges: (node: T) => Iterable<T>): T[][] {
+	let index = 0
+	const indices = new Map<T, number>()
+	const lowLinks = new Map<T, number>()
+	const stack: T[] = []
+	const onStack = new Set<T>()
+	const components: T[][] = []
+
+	function visit(node: T): void {
+		indices.set(node, index)
+		lowLinks.set(node, index)
+		index += 1
+		stack.push(node)
+		onStack.add(node)
+
+		for (const next of edges(node)) {
+			if (!indices.has(next)) {
+				visit(next)
+				lowLinks.set(node, Math.min(lowLinks.get(node)!, lowLinks.get(next)!))
+				continue
+			}
+			if (onStack.has(next)) {
+				lowLinks.set(node, Math.min(lowLinks.get(node)!, indices.get(next)!))
+			}
+		}
+
+		if (lowLinks.get(node) !== indices.get(node)) return
+		const component: T[] = []
+		while (stack.length > 0) {
+			const member = stack.pop()!
+			onStack.delete(member)
+			component.push(member)
+			if (member === node) break
+		}
+		components.push(component)
+	}
+
+	for (const node of nodes) {
+		if (indices.has(node)) continue
+		visit(node)
+	}
+
+	return components
 }
