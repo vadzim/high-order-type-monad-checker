@@ -225,7 +225,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			if (type.kind !== "typeAlias" || tupleReturnTypes.has(type)) continue
 			const branches = terminalReturns(type)
 			if (branches.length === 0) continue
-			if (branches.every(isAllowedConsumerBranch)) {
+			if (branches.every(branch => isAllowedConsumerBranch(type, branch, branches))) {
 				tupleReturnTypes.add(type)
 				changed = true
 			}
@@ -236,7 +236,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const branches = terminalReturns(consumerType)
 		const monadInputArg = consumerType.arguments.find(arg => arg.extends?.type.ref === monadClass) ?? null
 		for (const branch of branches) {
-			if (isAllowedConsumerBranch(branch)) continue
+			if (isAllowedConsumerBranch(consumerType, branch, branches)) continue
 			const sourceReturn = body(branch.type.ref)
 			const sourceRelated =
 				sourceReturn && branch.type.ref !== consumerType
@@ -490,8 +490,21 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		)
 	}
 
-	function isAllowedConsumerBranch(call: CGCall): boolean {
-		return call.type.name === "never" || isTupleWithMonadResult(call) || tupleReturnTypes.has(call.type.ref)
+	function isAllowedConsumerBranch(owner: CGType, call: CGCall, branches: CGCall[]): boolean {
+		if (call.type.name === "never") return true
+		if (isTupleWithMonadResult(call)) return true
+		if (call.type.ref === owner) {
+			// Allow direct self recursion only when this type has at least one other valid non-recursive and non-never return.
+			return branches.some(branch => isNonRecursiveConsumerReturn(owner, branch))
+		}
+		return tupleReturnTypes.has(call.type.ref)
+	}
+
+	function isNonRecursiveConsumerReturn(owner: CGType, call: CGCall): boolean {
+		if (call.type.ref === owner) return false
+		if (call.type.name === "never") return false
+		if (isTupleWithMonadResult(call)) return true
+		return tupleReturnTypes.has(call.type.ref)
 	}
 
 	function isMonadValueCall(call: CGCall): boolean {

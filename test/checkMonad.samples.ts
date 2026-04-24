@@ -1,4 +1,4 @@
-export type MonadSample = (
+export type MonadSample = { noAloneTest?: boolean } & (
 	| {
 			name: `ok: ${string}`
 			expectedKinds?: undefined
@@ -68,6 +68,50 @@ export const monadSamples: MonadSample[] = [
 	{
 		name: "fail: consumer must return consumer shape in all branches",
 		source: `type Bad<M extends Monad> = 1 extends 2 ? [M, 0] : string;`,
+	},
+	{
+		name: "ok: user consumer may return itself recursively when another branch returns tuple",
+		source: `type Ok<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : Ok<M, 0>;`,
+	},
+	{
+		name: "fail: user consumers may not be mutually recursive",
+		source: `
+type A<M extends Monad, C extends 0 | 1 = 0> = B<M, 0>;
+type B<M extends Monad, C extends 0 | 1 = 0> = A<M, 0>;
+`,
+	},
+	{
+		name: "fail: user consumers may not be mutually recursive even if one branch returns tuple",
+		source: `
+type A<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : B<M, 0>;
+type B<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : A<M, 0>;
+`,
+	},
+	{
+		name: "ok: user consumer may return itself recursively when another branch returns another call",
+		source: `type G<M extends Monad> = [MNext<M>, MRead<M>]; type Ok<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? G<M> : Ok<M, 0>;`,
+	},
+	{
+		name: "ok: user consumer may return itself recursively when another branch returns another call from another module",
+		source: `type Ok<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? MGet<M> : Ok<M, 0>;`,
+		noAloneTest: true,
+	},
+	{
+		name: "ok: user consumer may return another call from another module",
+		source: `type Ok<M extends Monad, C extends 0 | 1 = 0> = MGet<M>`,
+		noAloneTest: true,
+	},
+	{
+		name: "ok: user consumer may return another call",
+		source: `type G<M extends Monad> = [MNext<M>, MRead<M>]; type Ok<M extends Monad, C extends 0 | 1 = 0> = G<M>`,
+	},
+	{
+		name: "fail: user consumer should return proper tuple",
+		source: `type G<M extends Monad> = [MRead<M>, MRead<M>]`,
+	},
+	{
+		name: "fail: user consumer cannot return itself recursively without non-recursive non-never branch",
+		source: `type Bad<M extends Monad> = 1 extends 2 ? never : Bad<M>;`,
 	},
 	{
 		name: "fail: user type with monad input cannot return bare monad",

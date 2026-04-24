@@ -79,6 +79,9 @@ test("checkMonad basic", async () => {
 test("checkMonad rule matrix", async t => {
 	for (const sample of monadSamples) {
 		for (const multipleFilesMode of ["same", "different", "alone"] as const) {
+			if (sample.noAloneTest && multipleFilesMode === "alone") {
+				continue
+			}
 			const files = new Map(
 				(multipleFilesMode === "same"
 					? "source" in sample
