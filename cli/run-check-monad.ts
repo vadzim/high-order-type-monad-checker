@@ -5,7 +5,7 @@ import { buildContentGraph } from "../src/buildContentGraph.ts"
 import { concatContentGraphs } from "../src/concatContentGraphs.ts"
 import { getMonadViolations, type MonadTypeOption } from "../src/monadChecker.ts"
 import { formatGraphViolation } from "./format-graph-violation.ts"
-import type { FormatSourceSnippetOptions } from "./format-source-snippet.ts"
+import { resolveDiagnosticFromOffsets, type FormatSourceSnippetOptions } from "./format-source-snippet.ts"
 
 // CLI responsibility boundary:
 // - parse argv and read files
@@ -78,18 +78,35 @@ export async function runCli(argv: string[], streams: CliStreams = { error: mess
 		const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, monadType))
 
 		let errorCount = 0
+		const emittedViolations: typeof violations = []
 		for (const violation of violations) {
 			const formatted = formatGraphViolation(violation, files, cli.options)
 			if (formatted) {
-				streams.error(formatted)
+				streams.error(formatted + "\n")
 				errorCount++
+				emittedViolations.push(violation)
 			}
 		}
 
-		const fileCount = files.size
+		const fileStats = summarizeFiles(emittedViolations, files)
+		const fileCount = fileStats.length
+		const checkedFileCount = files.size
+		const checkedFileLabel = checkedFileCount === 1 ? "file" : "files"
 		const errorLabel = errorCount === 1 ? "error" : "errors"
 		const fileLabel = fileCount === 1 ? "file" : "files"
-		streams.error(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
+		streams.error(`Checked ${checkedFileCount} ${checkedFileLabel}.`)
+		if (errorCount === 0) {
+			streams.error("Found 0 errors.")
+		} else {
+			streams.error(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
+		}
+		if (fileStats.length > 0) {
+			streams.error("")
+			streams.error("Errors  Files")
+			for (const stat of fileStats) {
+				streams.error(`${String(stat.errors).padStart(6, " ")}  ${stat.path}:${stat.firstLine}`)
+			}
+		}
 
 		return errorCount > 0 ? 1 : 0
 	} catch (error) {
@@ -104,6 +121,28 @@ export async function runCli(argv: string[], streams: CliStreams = { error: mess
 		streams.error(String(error))
 		return 1
 	}
+}
+
+function summarizeFiles(
+	violations: Array<{ path: string; position: { start: number; end: number } }>,
+	files: ReadonlyMap<string, string>,
+): { path: string; errors: number; firstLine: number }[] {
+	const stats = new Map<string, { errors: number; firstLine: number }>()
+	for (const violation of violations) {
+		const source = files.get(violation.path)
+		if (!source) continue
+		const line = resolveDiagnosticFromOffsets(source, violation.position).line
+		const current = stats.get(violation.path)
+		if (!current) {
+			stats.set(violation.path, { errors: 1, firstLine: line })
+			continue
+		}
+		current.errors += 1
+		current.firstLine = Math.min(current.firstLine, line)
+	}
+	return Array.from(stats.entries())
+		.map(([path, stat]) => ({ path, ...stat }))
+		.sort((a, b) => a.path.localeCompare(b.path))
 }
 
 function parseCli(argv: string[]): ParsedCli {

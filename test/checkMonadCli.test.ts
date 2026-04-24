@@ -46,7 +46,7 @@ type Ok<M extends Monad> = [MNext<M>, MRead<M>]
 	await withTempFile(source, filePath => {
 		return captureCli([filePath, "--monad", filePath, "Monad:MCreate:MRead:MNext"]).then(out => {
 			assert.equal(out.status, 0, out.stderr)
-			assert.match(out.stderr, /Found 0 errors in 1 file\./)
+			assert.match(out.stderr, /Found 0 errors\./)
 		})
 	})
 })
@@ -68,6 +68,11 @@ type Bad<M extends Monad> = Pair<M, M>
 				assert.match(out.stderr, /The same evaluation path already consumed M here/)
 				assert.match(out.stderr, new RegExp(`${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`))
 				assert.match(out.stderr, /\n\s*\|\s*~+/m)
+				assert.match(out.stderr, /\nErrors  Files\n/)
+				assert.match(
+					out.stderr,
+					new RegExp(`\\n\\s*\\d+\\s+${filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`),
+				)
 			},
 		)
 	})
