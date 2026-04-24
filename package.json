@@ -11,8 +11,8 @@
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"test": "npm run --silent typecheck && node --test test/*.test.ts",
-		"check-external": "node cli/check-monad.ts --snippet-lines 5:5 '../jsql/src/parser/**/*.ts' '../jsql/src/engine/**/*.ts' --monad ../jsql/src/parser/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
-		"check-external-1": "node cli/check-monad.ts --snippet-lines 5:5 '../jsql/src/parser/sql-tokens.ts' --monad ../jsql/src/parser/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
+		"check-external": "node cli/check-monad.ts --snippet-lines 5:5 '../jsql/src/**/*.ts' '../jsql/core/**/*.ts' --monad ../jsql/core/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
+		"check-external-1": "node cli/check-monad.ts --snippet-lines 5:5 '../jsql/core/sql-tokens.ts' --monad ../jsql/core/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsgo -p tsconfig.json --noEmit"
 	},
