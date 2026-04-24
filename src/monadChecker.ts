@@ -74,6 +74,39 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		return normalized.length > 0 ? normalized : undefined
 	}
 
+	function findMonadConstraintFor(typeRef: CGType): {
+		decl: { message: string; position: CGPosition; path: string } | null
+		constraint: { message: string; position: CGPosition; path: string } | null
+	} {
+		const declarationCall = typeRef.declaration
+		const declarationRoot = declarationCall?.parent
+		const extendsCall = declarationRoot?.parent
+		const constraintTarget = extendsCall?.arguments[1]
+		if (!constraintTarget || constraintTarget.type.ref !== monadClass) return { decl: null, constraint: null }
+		if (declarationCall?.position && declarationCall.scope.path) {
+			return {
+				decl: {
+					message: `${typeRef.name} is declared here`,
+					position: declarationCall.position,
+					path: declarationCall.scope.path,
+				},
+				constraint: {
+					message: `${typeRef.name} is constrained by ${monadClass.name} here`,
+					position: constraintTarget.position,
+					path: constraintTarget.scope.path,
+				},
+			}
+		}
+		return {
+			decl: null,
+			constraint: {
+				message: `${typeRef.name} is constrained by ${monadClass.name} here`,
+				position: constraintTarget.position,
+				path: constraintTarget.scope.path,
+			},
+		}
+	}
+
 	const callToOwner = new Map(graph.types.values().flatMap(type => allCallsForType(type).map(call => [call, type])))
 
 	const monadValueTypes = new Set<CGType>()
@@ -147,6 +180,35 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 	}
 
+	for (const type of graph.types) {
+		for (const arg of type.arguments) {
+			const defaultCall = arg.default
+			if (!defaultCall) continue
+			const badDefaultUse = Array.from(allCalls(defaultCall)).find(
+				call => call.type.ref === monadClass || monadValueTypes.has(call.type.ref),
+			)
+			if (!badDefaultUse) continue
+			const monadConstraint = findMonadConstraintFor(badDefaultUse.type.ref)
+			violations.push({
+				owner: type,
+				violation: {
+					kind: "monad.invalidTypeParameterDefault",
+					message: `Using ${badDefaultUse.type.name} in a type parameter default is not allowed, because monad marker and monad value types cannot appear in generic defaults`,
+					position: badDefaultUse.position,
+					path: badDefaultUse.scope.path,
+					related: related(
+						{
+							message: "Type parameter declaration is here",
+							position: arg.variable.position,
+							path: arg.variable.scope.path,
+						},
+						monadConstraint.constraint,
+					),
+				},
+			})
+		}
+	}
+
 	const consumerTypes = new Set<CGType>()
 	if (monadConsumer) consumerTypes.add(monadConsumer)
 	const userMonadInputTypes = new Set(
@@ -172,6 +234,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	for (const consumerType of userMonadInputTypes) {
 		const branches = terminalReturns(consumerType)
+		const monadInputArg = consumerType.arguments.find(arg => arg.extends?.type.ref === monadClass) ?? null
 		for (const branch of branches) {
 			if (isAllowedConsumerBranch(branch)) continue
 			const sourceReturn = body(branch.type.ref)
@@ -195,9 +258,9 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					path: branch.scope.path,
 					related: related(
 						{
-							message: `${consumerType.name} accepts monad input here`,
-							position: consumerType.position,
-							path: consumerType.scope.path,
+							message: `${consumerType.name} accepts monad input via this constraint`,
+							position: monadInputArg?.extends?.position ?? consumerType.position,
+							path: monadInputArg?.extends?.scope.path ?? consumerType.scope.path,
 						},
 						sourceRelated,
 					),
@@ -293,11 +356,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					parent.arguments[0] !== call ? parent.arguments[0]?.position : firstArg?.variable.position
 				let relatedPath =
 					parent.arguments[0] !== call ? parent.arguments[0]?.scope.path : firstArg?.variable.scope.path
-				if (!relatedMessage) {
-					relatedMessage = monadUsageContextMessage(parent)
-					relatedPosition = parent.position
-					relatedPath = parent.scope.path
-				}
+				const monadConstraint = findMonadConstraintFor(call.type.ref)
 				violations.push({
 					owner: callToOwner.get(call) ?? null,
 					violation: {
@@ -305,11 +364,14 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 						message: monadUsageErrorMessage(call, parent),
 						position: call.position,
 						path: call.scope.path,
-						related: related({
-							message: relatedMessage,
-							position: relatedPosition,
-							path: relatedPath,
-						}),
+						related: related(
+							{
+								message: relatedMessage,
+								position: relatedPosition,
+								path: relatedPath,
+							},
+							monadConstraint.constraint,
+						),
 					},
 				})
 			}
@@ -327,6 +389,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					(scopeContains(prev.scope, call.scope) || sharesConditionalConditionPath(prev, call)),
 			)
 			if (previous) {
+				const monadConstraint = findMonadConstraintFor(call.type.ref)
 				violations.push({
 					owner: callToOwner.get(call) ?? null,
 					violation: {
@@ -334,11 +397,14 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 						message: `Using monad ${call.type.name} here is not allowed, because this evaluation path already consumed it earlier. Only ${options.readerName} may read the same monad multiple times`,
 						position: call.position,
 						path: call.scope.path,
-						related: related({
-							message: `The same evaluation path already consumed ${call.type.name} here`,
-							position: previous.position,
-							path: previous.scope.path,
-						}),
+						related: related(
+							{
+								message: `The same evaluation path already consumed ${call.type.name} here`,
+								position: previous.position,
+								path: previous.scope.path,
+							},
+							monadConstraint.constraint,
+						),
 					},
 				})
 				continue
@@ -368,6 +434,9 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 				// Focus on generic parameter-order root cause for this declaration.
 				if (kinds.has("monad.invalidTypeParameterOrder")) {
 					return kind === "monad.invalidTypeParameterOrder"
+				}
+				if (kinds.has("monad.invalidTypeParameterDefault")) {
+					return kind === "monad.invalidTypeParameterDefault"
 				}
 
 				// If invocation structure is wrong, branch-shape incompatibility is derivative noise.
@@ -705,6 +774,7 @@ function violationRank(violation: MonadViolation): number {
 		case "monad.invalidProducerInvocation":
 		case "monad.invalidConsumerInvocation":
 		case "monad.invalidTypeParameterOrder":
+		case "monad.invalidTypeParameterDefault":
 			return 1
 		case "monad.invalidMarkerUsage":
 		case "monad.invalidMonadUsageContext":

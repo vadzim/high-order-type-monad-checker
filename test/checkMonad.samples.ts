@@ -35,6 +35,21 @@ export const monadSamples: MonadSample[] = [
 		source: `type Bad<X, M extends Monad> = [M, X];`,
 	},
 	{
+		name: "fail: monad marker cannot be used in generic default",
+		source: `type Bad<T = Monad> = T;`,
+		expectedKinds: ["monad.invalidTypeParameterDefault"],
+	},
+	{
+		name: "fail: monad value type cannot be used in generic default",
+		source: `type Bad<M extends Monad, T = M> = [M, 0];`,
+		expectedKinds: ["monad.invalidTypeParameterDefault"],
+	},
+	{
+		name: "fail: monad value type cannot be used in generic default as a subexpression",
+		source: `type Bad<M extends Monad, T = M["m"]> = [M, 0];`,
+		expectedKinds: ["monad.invalidTypeParameterDefault"],
+	},
+	{
 		name: "fail: monad value can only be passed as first generic argument",
 		source: `type Pair<X, Y> = [X, Y]; type Bad<M extends Monad> = Pair<1, M>;`,
 	},
@@ -402,6 +417,18 @@ type R<A extends Monad> = \`\${A}\` extends infer U ? never : never;
 		name: `fail: wrong usage of monad 2`,
 		source: `
 type R<A extends Monad> = A[1] extends [infer U extends Monad] ? [U, 1] : never;
+`,
+	},
+	{
+		name: `fail: Monad inferred in conditional cannot be consumed wrongly`,
+		source: `
+type R<A extends Monad> = MGet<A> extends [infer R extends Monad, infer H] ? R[1] extends [infer U extends Monad] ? [U, 1] : never : never
+`,
+	},
+	{
+		name: `fail: Monad inferred in conditional cannot be consumed twice`,
+		source: `
+type R<A extends Monad> = MGet<A> extends [infer R extends Monad, infer H] ? [R, R] : never
 `,
 	},
 ]

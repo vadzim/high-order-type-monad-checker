@@ -38,12 +38,10 @@ export function formatGraphViolation(
 				relatedPosition,
 				options,
 			)
-			relatedChunks.push(indentSnippet(relatedSnippet, "    "))
+			relatedChunks.push(relatedSnippet)
 		}
 		if (relatedChunks.length > 0) {
-			result += "\n\n"
-			result += "    Related:\n"
-			result += relatedChunks.join("\n\n")
+			result += indentText(4, "\n\nRelated:\n" + relatedChunks.join("\n\n"))
 		}
 	}
 
@@ -55,9 +53,10 @@ function normalizePosition(pos: { start: number; end: number }, source: string):
 	return { start: safeStart, end: Math.max(safeStart + 1, pos.end) }
 }
 
-function indentSnippet(snippet: string, prefix: string): string {
-	return snippet
+function indentText(size: number, text: string): string {
+	const prefix = "".padStart(size)
+	return text
 		.split("\n")
-		.map(line => `${prefix}${line}`)
+		.map(line => line && `${prefix}${line}`)
 		.join("\n")
 }
