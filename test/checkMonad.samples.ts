@@ -74,18 +74,26 @@ export const monadSamples: MonadSample[] = [
 		source: `type Ok<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : Ok<M, 0>;`,
 	},
 	{
-		name: "fail: user consumers may not be mutually recursive",
+		name: "fail: user consumers may not be just mutually recursive",
 		source: `
 type A<M extends Monad, C extends 0 | 1 = 0> = B<M, 0>;
 type B<M extends Monad, C extends 0 | 1 = 0> = A<M, 0>;
 `,
 	},
 	{
-		name: "fail: user consumers may not be mutually recursive even if one branch returns tuple",
+		name: "ok: user consumers may be mutually recursive if one branch returns tuple",
 		source: `
 type A<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : B<M, 0>;
 type B<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? [M, 0] : A<M, 0>;
 `,
+	},
+	{
+		name: "ok: user consumers may be mutually recursive if one branch returns another call",
+		source: `
+type A<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? MGet<M> : B<M, 0>;
+type B<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? MGet<M> : A<M, 0>;
+`,
+		noAloneTest: true,
 	},
 	{
 		name: "ok: user consumer may return itself recursively when another branch returns another call",

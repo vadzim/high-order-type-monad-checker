@@ -217,15 +217,41 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		),
 	)
 	const tupleReturnTypes = new Set<CGType>()
+	const typeAliases = new Set(Array.from(graph.types).filter(type => type.kind === "typeAlias"))
+	const terminalReturnsByType = new Map(Array.from(typeAliases).map(type => [type, terminalReturns(type)] as const))
+	const returnTypeEdges = new Map<CGType, Set<CGType>>(
+		Array.from(typeAliases).map(type => [
+			type,
+			new Set(
+				terminalReturnsByType
+					.get(type)!
+					.flatMap(branch => (typeAliases.has(branch.type.ref) ? [branch.type.ref] : [])),
+			),
+		]),
+	)
+	const returnTypeComponents = stronglyConnectedComponents(
+		typeAliases,
+		type => returnTypeEdges.get(type) ?? new Set(),
+	)
 
 	changed = true
 	while (changed) {
 		changed = false
-		for (const type of graph.types) {
-			if (type.kind !== "typeAlias" || tupleReturnTypes.has(type)) continue
-			const branches = terminalReturns(type)
-			if (branches.length === 0) continue
-			if (branches.every(branch => isAllowedConsumerBranch(type, branch, branches))) {
+		for (const component of returnTypeComponents) {
+			if (component.every(type => tupleReturnTypes.has(type))) continue
+			const componentSet = new Set(component)
+			if (component.some(type => terminalReturnsByType.get(type)!.length === 0)) continue
+			const recursiveComponent =
+				component.length > 1 || component.some(type => returnTypeEdges.get(type)?.has(type) === true)
+			const allBranchesAllowed = component.every(type =>
+				terminalReturnsByType
+					.get(type)!
+					.every(branch => isAllowedConsumerBranchInComponent(branch, componentSet)),
+			)
+			if (!allBranchesAllowed) continue
+			if (recursiveComponent && !hasNonRecursiveReturn(componentSet)) continue
+			for (const type of component) {
+				if (tupleReturnTypes.has(type)) continue
 				tupleReturnTypes.add(type)
 				changed = true
 			}
@@ -236,7 +262,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const branches = terminalReturns(consumerType)
 		const monadInputArg = consumerType.arguments.find(arg => arg.extends?.type.ref === monadClass) ?? null
 		for (const branch of branches) {
-			if (isAllowedConsumerBranch(consumerType, branch, branches)) continue
+			if (isAllowedConsumerBranch(branch)) continue
 			const sourceReturn = body(branch.type.ref)
 			const sourceRelated =
 				sourceReturn && branch.type.ref !== consumerType
@@ -490,21 +516,28 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		)
 	}
 
-	function isAllowedConsumerBranch(owner: CGType, call: CGCall, branches: CGCall[]): boolean {
+	function isAllowedConsumerBranch(call: CGCall): boolean {
 		if (call.type.name === "never") return true
 		if (isTupleWithMonadResult(call)) return true
-		if (call.type.ref === owner) {
-			// Allow direct self recursion only when this type has at least one other valid non-recursive and non-never return.
-			return branches.some(branch => isNonRecursiveConsumerReturn(owner, branch))
-		}
 		return tupleReturnTypes.has(call.type.ref)
 	}
 
-	function isNonRecursiveConsumerReturn(owner: CGType, call: CGCall): boolean {
-		if (call.type.ref === owner) return false
-		if (call.type.name === "never") return false
+	function isAllowedConsumerBranchInComponent(call: CGCall, component: Set<CGType>): boolean {
+		if (call.type.name === "never") return true
 		if (isTupleWithMonadResult(call)) return true
+		if (component.has(call.type.ref)) return true
 		return tupleReturnTypes.has(call.type.ref)
+	}
+
+	function hasNonRecursiveReturn(component: Set<CGType>): boolean {
+		for (const type of component) {
+			for (const branch of terminalReturnsByType.get(type) ?? []) {
+				if (branch.type.name === "never") continue
+				if (isTupleWithMonadResult(branch)) return true
+				if (!component.has(branch.type.ref) && tupleReturnTypes.has(branch.type.ref)) return true
+			}
+		}
+		return false
 	}
 
 	function isMonadValueCall(call: CGCall): boolean {
@@ -857,4 +890,49 @@ function compareCalls(left: CGCall, right: CGCall): number {
 	if (left.scope.path !== right.scope.path) return left.scope.path.localeCompare(right.scope.path)
 	if (left.position.start !== right.position.start) return left.position.start - right.position.start
 	return left.position.end - right.position.end
+}
+
+function stronglyConnectedComponents<T>(nodes: Iterable<T>, edges: (node: T) => Iterable<T>): T[][] {
+	let index = 0
+	const indices = new Map<T, number>()
+	const lowLinks = new Map<T, number>()
+	const stack: T[] = []
+	const onStack = new Set<T>()
+	const components: T[][] = []
+
+	function visit(node: T): void {
+		indices.set(node, index)
+		lowLinks.set(node, index)
+		index += 1
+		stack.push(node)
+		onStack.add(node)
+
+		for (const next of edges(node)) {
+			if (!indices.has(next)) {
+				visit(next)
+				lowLinks.set(node, Math.min(lowLinks.get(node)!, lowLinks.get(next)!))
+				continue
+			}
+			if (onStack.has(next)) {
+				lowLinks.set(node, Math.min(lowLinks.get(node)!, indices.get(next)!))
+			}
+		}
+
+		if (lowLinks.get(node) !== indices.get(node)) return
+		const component: T[] = []
+		while (stack.length > 0) {
+			const member = stack.pop()!
+			onStack.delete(member)
+			component.push(member)
+			if (member === node) break
+		}
+		components.push(component)
+	}
+
+	for (const node of nodes) {
+		if (indices.has(node)) continue
+		visit(node)
+	}
+
+	return components
 }
