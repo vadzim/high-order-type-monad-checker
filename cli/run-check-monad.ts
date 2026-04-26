@@ -21,6 +21,7 @@ type ParsedCli = {
 }
 
 type CliStreams = {
+	log(message: string): void
 	error(message: string): void
 }
 
@@ -46,10 +47,10 @@ violations for each provided monad configuration.
 Options and globs may appear in any order. Exit 1 if any violation, if
 no --monad is provided, if globs are missing, or if no files match.`
 
-export async function runCli(argv: string[], streams: CliStreams = { error: message => console.error(message) }) {
+export async function runCli(argv: string[], streams: CliStreams = console) {
 	try {
 		if (argv.includes("--help") || argv.includes("-h")) {
-			streams.error(await renderHelpText())
+			streams.log(await renderHelpText())
 			return 0
 		}
 
@@ -94,17 +95,17 @@ export async function runCli(argv: string[], streams: CliStreams = { error: mess
 		const checkedFileLabel = checkedFileCount === 1 ? "file" : "files"
 		const errorLabel = errorCount === 1 ? "error" : "errors"
 		const fileLabel = fileCount === 1 ? "file" : "files"
-		streams.error(`Checked ${checkedFileCount} ${checkedFileLabel}.`)
+		streams.log(`Checked ${checkedFileCount} ${checkedFileLabel}.`)
 		if (errorCount === 0) {
-			streams.error("Found 0 errors.")
+			streams.log("Found 0 errors.")
 		} else {
-			streams.error(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
+			streams.log(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
 		}
 		if (fileStats.length > 0) {
-			streams.error("")
-			streams.error("Errors  Files")
+			streams.log("")
+			streams.log("Errors  Files")
 			for (const stat of fileStats) {
-				streams.error(`${String(stat.errors).padStart(6, " ")}  ${stat.path}:${stat.firstLine}`)
+				streams.log(`${String(stat.errors).padStart(6, " ")}  ${stat.path}:${stat.firstLine}`)
 			}
 		}
 

@@ -31,9 +31,8 @@ async function withTempFile(source: string, fn: (filePath: string) => void | Pro
 async function captureCli(args: string[]) {
 	const messages: string[] = []
 	const status = await runCli(args, {
-		error(message) {
-			messages.push(message)
-		},
+		log: message => messages.push(message),
+		error: message => messages.push(message),
 	})
 	return { status, stderr: messages.join("\n").replaceAll(/\x1b\[[0-9;]*m/g, "") }
 }
