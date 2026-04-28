@@ -58,12 +58,15 @@ For monad infer constraints, allowed pattern is strict:
 - RHS must be exactly a 2-item tuple pattern.
 - Monad-constrained infer must be in slot 1:
     - `... extends [infer M extends Monad, infer _] ? ... : ...`
+- Additional consumer-only shorthand is allowed:
+    - `ConfiguredConsumer<...> extends infer M extends Monad ? ... : ...`
+    - this is valid only when `ConfiguredConsumer` is the primitive consumer from settings and appears as the immediate left side of the conditional `extends` check.
 
 Invalid examples:
 
 - infer in second slot,
 - no `extends Monad`,
-- non-tuple RHS,
+- non-tuple RHS (except the consumer-only shorthand above),
 - nested/wrapped infer pattern.
 
 Violation kind: `monad.invalidInferConstraint`

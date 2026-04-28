@@ -166,8 +166,22 @@ type B<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? MGet<M> : A<M, 0>;
 		source: `type Ok<M extends Monad> = MNext<M> extends [infer N extends Monad, ...infer _] ? never : never;`,
 	},
 	{
-		name: "fail: consumer call on left side of extends needs tuple rhs",
+		name: "ok: configured consumer call may use direct root infer-extends marker form",
+		source: `type Ok<M extends Monad> = MNext<M> extends infer NextMonad extends Monad ? [NextMonad, 1] : never;`,
+	},
+	{
+		name: "fail: consumer call on left side of extends needs tuple rhs or direct infer-extends marker rhs",
 		source: `type Bad<M extends Monad> = MNext<M> extends Monad ? never : never;`,
+	},
+	{
+		name: "fail: non-consumer left side cannot use direct infer-extends marker form",
+		source: `type Wrap<T extends Monad> = [T, 1]; type Bad<M extends Monad> = Wrap<M> extends infer NextMonad extends Monad ? NextMonad : never;`,
+		expectedKinds: ["monad.invalidProducerPattern"],
+	},
+	{
+		name: "fail: direct infer-extends marker form forbids nested infer in generic wrappers",
+		source: `type Wrap<T> = T; type Bad<M extends Monad> = MNext<M> extends Wrap<infer N> extends Monad ? N : never;`,
+		expectedKinds: ["monad.invalidConsumerInvocation", "monad.invalidMarkerUsage"],
 	},
 	{
 		name: "ok: monad M can be passed to argument of Monad type class",

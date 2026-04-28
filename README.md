@@ -55,13 +55,17 @@ A consumer call is only allowed in two places:
 - the configured primitive consumer may also appear as the first element of a terminal `[monad, result]` tuple return
 - the configured primitive consumer may be passed as the first argument to a type whose first generic parameter is `extends MonadClassFromSettings` (including the configured primitive consumer itself)
 
-When used on the left side of `extends`, the right side must be a tuple of the form:
+When used on the left side of `extends`, the right side is usually a tuple of the form:
 
 - `[infer T extends MonadClassFromSettings, ...]`
 
+Additionally, only for the configured primitive consumer, the direct root conditional form is allowed:
+
+- `ConsumerFromSettings<M> extends infer NextMonad extends MonadClassFromSettings ? ... : ...`
+
 The configured primitive consumer may also be used as the first element of a tuple on the left side of `extends` in a conditional, when that `extends` right side uses the same monad tuple pattern.
 
-This allows destructuring a consumer result in a conditional type while forbidding arbitrary nesting.
+This keeps the same guardrails as tuple wrapping while making that wrapper unnecessary for this specific consumer-root conditional case. Nested/wrapped infer forms remain forbidden.
 
 ### User producer invocation rules
 

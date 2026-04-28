@@ -300,7 +300,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 				owner: callToOwner.get(call) ?? consumerType,
 				violation: {
 					kind: "monad.invalidConsumerInvocation",
-					message: `Using consumer ${consumerType.name} here is not allowed. It must be either in terminal return position of another consumer, or as the immediate left side of extends with a tuple pattern on the right side like [infer ... extends ${monadClass.name}, result]`,
+					message: `Using consumer ${consumerType.name} here is not allowed. It must be either in terminal return position of another consumer, or as the immediate left side of extends with either (a) a tuple pattern on the right side like [infer ... extends ${monadClass.name}, result], or (b) infer ... extends ${monadClass.name} (configured primitive consumer only)`,
 					position: call.position,
 					path: call.scope.path,
 					related: related({
@@ -549,7 +549,10 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		const owner = callToOwner.get(call)
 		if (monadConsumer && owner === monadConsumer && terminalReturns(owner).some(ret => ret === call)) return true
 		if (call.parent?.type.name !== "<extends>" || call.parent.arguments[0] !== call) return false
-		return isTupleWithConfiguredMonadPattern(call.parent.arguments[1] ?? null)
+		return (
+			isTupleWithConfiguredMonadPattern(call.parent.arguments[1] ?? null) ||
+			isConfiguredConsumerRootConditionalInferExtendsPattern(call)
+		)
 	}
 
 	function isAllowedUserProducerInvocation(call: CGCall): boolean {
@@ -677,9 +680,36 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			) {
 				return true
 			}
+
+			if (
+				// configuredConsumerCall extends infer T extends Monad ? ...
+				call.parent.parent?.type.name === "<extends>" &&
+				call.parent.parent.arguments[1] === call.parent &&
+				call.parent.parent.parent?.type.name === "<conditional>" &&
+				call.parent.parent.parent.arguments[0] === call.parent.parent &&
+				monadConsumer &&
+				call.parent.parent.arguments[0]?.type.ref === monadConsumer
+			) {
+				return true
+			}
 		}
 
 		return false
+	}
+
+	function isConfiguredConsumerRootConditionalInferExtendsPattern(call: CGCall): boolean {
+		if (!monadConsumer || call.type.ref !== monadConsumer) return false
+		const extendsCall = call.parent
+		if (!extendsCall || extendsCall.type.name !== "<extends>" || extendsCall.arguments[0] !== call) return false
+		const rhs = extendsCall.arguments[1]
+		if (
+			!rhs ||
+			rhs.type.name !== "<extends>" ||
+			rhs.arguments[0]?.type.name !== "<typeDeclaration>" ||
+			rhs.arguments[1]?.type.ref !== monadClass
+		)
+			return false
+		return extendsCall.parent?.type.name === "<conditional>" && extendsCall.parent.arguments[0] === extendsCall
 	}
 
 	function isMonadArgumentUsage(call: CGCall): boolean {
