@@ -56,6 +56,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	}
 
 	if (!monadClass) return []
+	const monadClassName = monadClass.name
 
 	function related(
 		...items: (
@@ -350,11 +351,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					message: `Using producer ${producerType.name} here is not allowed. A user producer call must be either in immediate terminal return position of another user producer, or as the immediate left side of conditional extends with a tuple pattern like [infer M2 extends ${monadClass.name}, infer R2]`,
 					position: call.position,
 					path: call.scope.path,
-					related: related({
-						message: `${producerType.name} is declared here`,
-						position: producerType.position,
-						path: producerType.scope.path,
-					}),
+					related: related(...invalidProducerInvocationRelated(call, producerType)),
 				},
 			})
 		}
@@ -510,8 +507,13 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		return (
 			(call.type.name === "<tuple>" || call.type.name === "<readonlyTuple>") &&
 			call.arguments.length >= 2 &&
-			isMonadValueCall(call.arguments[0]!)
+			isMonadCompatibleCall(call.arguments[0]!)
 		)
+	}
+
+	function isMonadCompatibleCall(call: CGCall): boolean {
+		if (isMonadValueCall(call)) return true
+		return findMonadConstraintFor(call.type.ref).constraint != null
 	}
 
 	function isAllowedConsumerBranch(call: CGCall): boolean {
@@ -579,6 +581,145 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		if (call.parent.parent?.type.name !== "<conditional>" || call.parent.parent.arguments[0] !== call.parent)
 			return false
 		return isInferMonadTupleDestructurePattern(call.parent.arguments[1] ?? null)
+	}
+
+	function invalidProducerInvocationRelated(
+		call: CGCall,
+		producerType: CGType,
+	): { message?: string; position?: CGPosition; path?: string }[] {
+		const chain: { message?: string; position?: CGPosition; path?: string }[] = [
+			{
+				message: `${producerType.name} is declared here`,
+				position: producerType.position,
+				path: producerType.scope.path,
+			},
+		]
+
+		const owner = callToOwner.get(call)
+		const wrapper = call.parent
+		if (wrapper) {
+			chain.push({
+				message: `Producer call is nested in this wrapper (${wrapper.type.name})`,
+				position: wrapper.position,
+				path: wrapper.scope.path,
+			})
+		}
+		if (!owner) return chain
+
+		chain.push({
+			message: `Enclosing type ${owner.name} is declared here`,
+			position: owner.position,
+			path: owner.scope.path,
+		})
+
+		const ownerBody = body(owner)
+		if (ownerBody) {
+			chain.push({
+				message: "Expected immediate terminal return position of the enclosing producer is here",
+				position: ownerBody.position,
+				path: ownerBody.scope.path,
+			})
+		}
+
+		const nearestConditional = Array.from(parents(call)).find(parent => parent.type.name === "<conditional>")
+		if (nearestConditional) {
+			chain.push({
+				message: "Nearest conditional check is here",
+				position: nearestConditional.position,
+				path: nearestConditional.scope.path,
+			})
+		}
+
+		const nearestExtends = Array.from(parents(call)).find(parent => parent.type.name === "<extends>")
+		if (nearestExtends) {
+			chain.push({
+				message: "Nearest extends check is here",
+				position: nearestExtends.position,
+				path: nearestExtends.scope.path,
+			})
+		}
+
+		if (!hasMonadInput(owner)) {
+			chain.push({
+				message: `${owner.name} does not accept ${monadClassName} input, so producer calls are not allowed here`,
+				position: owner.position,
+				path: owner.scope.path,
+			})
+			return chain
+		}
+
+		if (userProducerTypes.has(owner)) {
+			return chain
+		}
+
+		chain.push({
+			message: `${owner.name} is not validated as a producer here`,
+			position: owner.position,
+			path: owner.scope.path,
+		})
+
+		chain.push(...producerValidationFailureChain(owner, new Set<CGType>()))
+
+		return chain
+	}
+
+	function producerValidationFailureChain(
+		type: CGType,
+		seen: Set<CGType>,
+	): { message?: string; position?: CGPosition; path?: string }[] {
+		if (seen.has(type)) return []
+		seen.add(type)
+
+		const branches = terminalReturnsByType.get(type) ?? terminalReturns(type)
+		for (const branch of branches) {
+			if (branch.type.name === "never") continue
+			if (isTupleWithMonadResult(branch)) continue
+			if (tupleReturnTypes.has(branch.type.ref)) continue
+
+			const result: { message?: string; position?: CGPosition; path?: string }[] = [
+				{
+					message: `${type.name} returns this non-producer branch`,
+					position: branch.position,
+					path: branch.scope.path,
+				},
+			]
+
+			const returnedType = branch.type.ref
+			if (!returnedType || returnedType === type) return result
+
+			result.push({
+				message: `${returnedType.name} is declared here`,
+				position: returnedType.position,
+				path: returnedType.scope.path,
+			})
+
+			if (!hasMonadInput(returnedType)) {
+				result.push({
+					message: `${returnedType.name} does not accept ${monadClassName} input and cannot serve as a producer return`,
+					position: returnedType.position,
+					path: returnedType.scope.path,
+				})
+				return result
+			}
+
+			if (tupleReturnTypes.has(returnedType)) {
+				result.push({
+					message: `${returnedType.name} is producer-compatible; this branch fails for a different reason`,
+					position: returnedType.position,
+					path: returnedType.scope.path,
+				})
+				return result
+			}
+
+			result.push({
+				message: `${returnedType.name} is not validated as a producer because one of its returns is invalid`,
+				position: returnedType.position,
+				path: returnedType.scope.path,
+			})
+			return [...result, ...producerValidationFailureChain(returnedType, seen)]
+		}
+
+		return []
 	}
 
 	function isInferMonadTupleDestructurePattern(call: CGCall | null): boolean {
@@ -801,7 +942,9 @@ function compactViolations(violations: MonadViolation[]): MonadViolation[] {
 		if (!unique.has(key)) unique.set(key, violation)
 	}
 
-	const reduced = suppressGenericBranchViolations(Array.from(unique.values()))
+	const reduced = suppressIncompatibleBySharedReturnSource(
+		suppressGenericBranchViolations(Array.from(unique.values())),
+	)
 
 	const groupedBySpan = Map.groupBy(reduced.values(), violation =>
 		[violation.path, violation.position.start, violation.position.end].join("::"),
@@ -824,6 +967,21 @@ function compactViolations(violations: MonadViolation[]): MonadViolation[] {
 function suppressGenericBranchViolations(violations: MonadViolation[]): MonadViolation[] {
 	return violations.filter(violation => {
 		if (violation.kind !== "monad.incompatibleTypes") return true
+		const source = findReturnSourceRelated(violation)
+		if (
+			source &&
+			violations.some(candidate => {
+				if (candidate === violation) return false
+				if (!candidate.kind.startsWith("monad.")) return false
+				if (candidate.kind === "monad.incompatibleTypes") return false
+				if (candidate.path !== source.path) return false
+				return (
+					candidate.position.start <= source.position.start && candidate.position.end >= source.position.end
+				)
+			})
+		) {
+			return false
+		}
 		return !violations.some(candidate => {
 			if (candidate === violation) return false
 			if (!candidate.kind.startsWith("monad.invalid")) return false
@@ -832,6 +990,25 @@ function suppressGenericBranchViolations(violations: MonadViolation[]): MonadVio
 				candidate.position.start >= violation.position.start && candidate.position.end <= violation.position.end
 			)
 		})
+	})
+}
+
+function findReturnSourceRelated(
+	violation: MonadViolation,
+): { message?: string; position: CGPosition; path: string } | null {
+	return violation.related?.find(item => item.message?.includes("return source is here")) ?? null
+}
+
+function suppressIncompatibleBySharedReturnSource(violations: MonadViolation[]): MonadViolation[] {
+	const seenSources = new Set<string>()
+	return violations.filter(violation => {
+		if (violation.kind !== "monad.incompatibleTypes") return true
+		const source = findReturnSourceRelated(violation)
+		if (!source) return true
+		const key = [source.path, source.position.start, source.position.end].join("::")
+		if (seenSources.has(key)) return false
+		seenSources.add(key)
+		return true
 	})
 }
 

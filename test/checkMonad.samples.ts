@@ -384,6 +384,13 @@ type R<A extends Monad> = P<A> extends [infer M extends Monad, infer H] ? M : ne
 `,
 	},
 	{
+		name: `fail: producer call in a non-producer owner shows transitive producer validation chain`,
+		source: `
+type P<A extends Monad> = [A, 1];
+type Bad<A extends Monad> = 1 extends 2 ? P<A> : string;
+`,
+	},
+	{
 		name: `fail: producer must not return bare monad type`,
 		source: `
 type P<A extends Monad> = A;

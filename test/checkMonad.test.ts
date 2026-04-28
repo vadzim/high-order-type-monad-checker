@@ -141,6 +141,40 @@ test("checkMonad rule matrix", async t => {
 							].join("\n"),
 						)
 					}
+					if (sample.name === "fail: producer call is forbidden inside tuple element") {
+						const producerInvocation = violations.find(v => v.kind === "monad.invalidProducerInvocation")
+						assert.ok(producerInvocation, "Expected monad.invalidProducerInvocation violation")
+						const relatedMessages = (producerInvocation.related ?? []).map(item => item.message ?? "")
+						assert.ok(relatedMessages.length >= 3, "Expected related chain with multiple context items")
+						assert.ok(
+							relatedMessages.some(message => message.includes("is declared here")),
+							"Expected declaration context in related chain",
+						)
+						assert.ok(
+							relatedMessages.some(message => message.includes("nested in this wrapper")),
+							"Expected wrapper context in related chain",
+						)
+						assert.ok(
+							relatedMessages.some(message => message.includes("Expected immediate terminal return position")),
+							"Expected allowed-position guidance in related chain",
+						)
+					}
+					if (
+						sample.name ===
+						"fail: producer call in a non-producer owner shows transitive producer validation chain"
+					) {
+						const producerInvocation = violations.find(v => v.kind === "monad.invalidProducerInvocation")
+						assert.ok(producerInvocation, "Expected monad.invalidProducerInvocation violation")
+						const relatedMessages = (producerInvocation.related ?? []).map(item => item.message ?? "")
+						assert.ok(
+							relatedMessages.some(message => message.includes("is not validated as a producer here")),
+							"Expected owner producer-validation status in related chain",
+						)
+						assert.ok(
+							relatedMessages.some(message => message.includes("returns this non-producer branch")),
+							"Expected failing branch context in related chain",
+						)
+					}
 				}
 			})
 		}
