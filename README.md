@@ -41,7 +41,7 @@ The configured `consumerName` type is the only special consumer that is allowed 
 
 For every user type alias (not the configured primitive consumer and not the configured reader) that accepts monad input, every terminal return branch must be one of:
 
-- `[monad, result]`
+- `[monad, result, ...rest]` (tuple length >= 2)
 - `never`
 
 If such a type returns a bare monad in any branch, that is a violation.
@@ -52,7 +52,7 @@ A consumer call is only allowed in two places:
 
 - as the terminal return of another consumer branch
 - directly on the left side of a conditional `extends`
-- the configured primitive consumer may also appear as the first element of a terminal `[monad, result]` tuple return
+- the configured primitive consumer may also appear as the first element of a terminal tuple return with monad in slot 1 and length >= 2
 - the configured primitive consumer may be passed as the first argument to a type whose first generic parameter is `extends MonadClassFromSettings` (including the configured primitive consumer itself)
 
 When used on the left side of `extends`, the right side is usually a tuple of the form:
@@ -69,7 +69,7 @@ This keeps the same guardrails as tuple wrapping while making that wrapper unnec
 
 ### User producer invocation rules
 
-For user producers (type aliases with monad input whose terminal returns are `[monad, result]` / `readonly [monad, result]` or `never`), a producer call is only allowed in two places:
+For user producers (type aliases with monad input whose terminal returns are `[monad, result, ...rest]` / `readonly [monad, result, ...rest]` or `never`, with tuple length >= 2), a producer call is only allowed in two places:
 
 - immediate terminal return of another user producer:
 - `type R<M extends Monad> = P<M, "x">`
@@ -110,7 +110,7 @@ The callee must declare its first generic parameter as monad-bound (`extends Mon
 
 The one exception is the consumer return shape:
 
-- `[monad, result]`
+- `[monad, result, ...rest]` (tuple length >= 2)
 
 There the monad is allowed in the first tuple slot by design.
 
@@ -130,7 +130,7 @@ The checker is trying to model an expensive state-like value:
 - the configured monad class only marks values; it is not itself consumable
 - readers may inspect it
 - the configured primitive consumer may advance it and return a bare monad
-- user types that accept monad input must return `[monad, result]` (or `never`), not a bare monad
+- user types that accept monad input must return `[monad, result, ...rest]` (or `never`), not a bare monad
 - outside of the reader exception, the same monad should not be consumed more than once along a single branch path
 
 ## CLI

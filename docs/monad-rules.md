@@ -32,11 +32,11 @@ Violation kind: `monad.invalidGenericArgumentConstraint`
 
 A declaration that accepts monad-compatible input must return one of:
 
-1. A 2-item tuple where the first element is monad-compatible:
-    - `[MonadLike, Result]`
+1. A tuple with at least 2 items where the first element is monad-compatible:
+    - `[MonadLike, Result, ...Rest]`
 2. A call to another declaration that is itself a valid monad producer.
 
-Everything else is invalid (bare monad value, object wrapper, 3-tuple, etc.).
+Everything else is invalid (bare monad value, object wrapper, tuple with less than 2 items, etc.).
 
 Violation kind: `monad.invalidProducerReturn`
 
@@ -76,7 +76,7 @@ Violation kind: `monad.invalidInferConstraint`
 Monad usage is allowed only as:
 
 1. First generic argument of a callee whose first parameter is monad-bound.
-2. `tuple[0]` in a returned 2-item tuple.
+2. `tuple[0]` in a returned tuple with length >= 2.
 3. A direct single return from a declaration that does not accept monad input.
 
 Any other usage is invalid.
@@ -129,13 +129,13 @@ Current canonical diagnostics (semantic meaning):
 - `monad.invalidGenericArgumentConstraint`:
     - "Monad-compatible type parameters are only allowed in the first generic parameter slot."
 - `monad.invalidProducerReturn`:
-    - "Types that accept Monad-compatible parameters must return either a 2-item tuple `[Monad, result]` or a call to another Monad-producing type which returns such a tuple."
+    - "Types that accept Monad-compatible parameters must return either a tuple `[Monad, result, ...rest]` (length >= 2) or a call to another Monad-producing type which returns such a tuple."
 - `monad.invalidProducerInvocation`:
     - "Monad-producing types may only be invoked as a direct terminal return value or immediately before `extends` with tuple destructuring on the right side."
 - `monad.invalidInferConstraint`:
     - "Monad-compatible infer constraints are only allowed as the 1st element in a 2-item tuple pattern."
 - `monad.invalidMonadUsage`:
-    - "Monad usage is allowed only as: first generic argument of a callee whose first parameter is Monad-bound, tuple[0] in a returned 2-item tuple, or a direct single return from a declaration that does not accept Monad input."
+    - "Monad usage is allowed only as: first generic argument of a callee whose first parameter is Monad-bound, tuple[0] in a returned tuple of length >= 2, or a direct single return from a declaration that does not accept Monad input."
 - `monad.consumeMultipleInPath`:
     - "Monad value is linear: after first use it cannot be used again in the same scope or descendant scopes."
 - `monad.inconsistentBranchReturn`:

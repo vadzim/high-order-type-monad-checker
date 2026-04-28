@@ -396,9 +396,15 @@ type P<A extends Monad> = { a: A };
 `,
 	},
 	{
-		name: `fail: producer must not return three-item tuple`,
+		name: `ok: producer may return three-item tuple with monad in first slot`,
 		source: `
 type P<A extends Monad> = [A, 1, 3];
+`,
+	},
+	{
+		name: `ok: producer may return readonly three-item tuple with monad in first slot`,
+		source: `
+type P<A extends Monad> = readonly [A, 1, 3];
 `,
 	},
 	{

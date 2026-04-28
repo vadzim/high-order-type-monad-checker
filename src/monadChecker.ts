@@ -276,8 +276,8 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 					kind: "monad.incompatibleTypes",
 					message:
 						branches.length > 1
-							? `This branch of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never in every branch`
-							: `Return type of ${consumerType.name} is not allowed, because a user type that accepts monad input must return [monad, result] or never`,
+							? `This branch of ${consumerType.name} is not allowed, because a user type that accepts monad input must return a tuple (length >= 2) with monad in the first slot, or never, in every branch`
+							: `Return type of ${consumerType.name} is not allowed, because a user type that accepts monad input must return a tuple (length >= 2) with monad in the first slot, or never`,
 					position: branch.position,
 					path: branch.scope.path,
 					related: related(
@@ -509,7 +509,7 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 	function isTupleWithMonadResult(call: CGCall): boolean {
 		return (
 			(call.type.name === "<tuple>" || call.type.name === "<readonlyTuple>") &&
-			call.arguments.length === 2 &&
+			call.arguments.length >= 2 &&
 			isMonadValueCall(call.arguments[0]!)
 		)
 	}
@@ -599,12 +599,12 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			return `Using monad ${call.type.name} here is not allowed, because this syntax form cannot consume monad values`
 		}
 		if (parent.type.name === "<tuple>" || parent.type.name === "<readonlyTuple>") {
-			return `Using monad ${call.type.name} here is not allowed, because tuple usage is allowed only for [monad, result] consumer returns`
+			return `Using monad ${call.type.name} here is not allowed, because tuple usage is allowed only for consumer returns with monad in the first slot and tuple length >= 2`
 		}
 		if (parent.type.name === "<object>" || parent.type.name === "<pair>" || parent.type.name === "<readonlyPair>") {
 			return `Using monad ${call.type.name} here is not allowed, because object wrappers cannot consume monad values`
 		}
-		return `Using monad ${call.type.name} here is not allowed. Allowed forms are: (1) pass it as the first argument of a type whose first generic parameter is monad-bound; (2) return it as the first item of a [monad, result] tuple`
+		return `Using monad ${call.type.name} here is not allowed. Allowed forms are: (1) pass it as the first argument of a type whose first generic parameter is monad-bound; (2) return it as the first item of a tuple with length >= 2`
 	}
 
 	function monadArgumentUsageKind(parent: CGCall): string {
