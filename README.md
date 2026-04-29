@@ -1,26 +1,31 @@
-# monad-checker
+# high-order-type-monad-checker
 
-`monad-checker` experiments with type-level rules for expensive, single-consume values represented in TypeScript types.
+This checker is a **very specific** tool: it automatically checks that a marked type is treated as **consumed only once** along the type-level flows it models—so you do not accidentally build APIs where the same logical resource can be “used up” twice.
 
-## `monadChecker2`
+The motivating scenario is a **compile-time parser** expressed in TypeScript’s type system. When **LLM-generated** type-level code participates in the pipeline, you still want a hard guarantee that a **stream of tokens** is not advanced or re-entered in a way that implies **parsing the source string into tokens more than once**. Tokenisation is **expensive** when done correctly, so the checker encodes a single-pass discipline instead of hoping every generated branch respects it.
 
-`src/monadChecker2.ts` works on the content graph built by `buildContentGraph`.
-It treats the configured `Monad` type as a marker class and applies a small set of plain structural rules.
+## Checker (`src/monadChecker.ts`)
+
+`getMonadViolations` in `src/monadChecker.ts` runs on the content graph from `buildContentGraph`, merged across files with `concatContentGraphs` (same pipeline as the CLI).
+It treats the configured monad type as a marker and applies a small set of structural rules.
 
 ### Settings
 
-The checker needs four declarations from one module:
+Configuration matches `MonadTypeOption` in code: a module `path` plus four type names that must exist in that module’s scope.
 
+- `path`: the settings module (the `<file>` argument to `--monad` on the CLI)
 - `name`: the public monad class/type marker
 - `constructorName`: a primitive constructor related to monad values
 - `readerName`: the only configured reader that may inspect monad internals freely
 - `consumerName`: the only configured primitive consumer that may inspect monad internals freely
 
+In the bullets below, **`Monad`** means whatever you passed as `name` / the first `--monad` segment, and **`Consumer`** means the type named by `consumerName` (the fourth segment). The test suite often aliases them as `Monad`, `MRead`, and so on.
+
 ### What counts as a monad-like value
 
 The checker treats these as monad-carrying types:
 
-- type parameters and inferred types declared with `extends MonadClassFromSettings`
+- type parameters and inferred types declared with `extends Monad`
 - declarations marked by using the configured monad class on the right side of `extends`
 - generic type parameters and `infer` bindings whose constraint is the configured monad class
 - type aliases whose terminal returns are always monad-carrying or `never`
@@ -48,20 +53,20 @@ If such a type returns a bare monad in any branch, that is a violation.
 
 ### Consumer invocation rules
 
-A consumer call is only allowed in two places:
+Configured primitive `Consumer` calls are restricted to the patterns the checker recognizes, including:
 
 - as the terminal return of another consumer branch
 - directly on the left side of a conditional `extends`
 - the configured primitive consumer may also appear as the first element of a terminal tuple return with monad in slot 1 and length >= 2
-- the configured primitive consumer may be passed as the first argument to a type whose first generic parameter is `extends MonadClassFromSettings` (including the configured primitive consumer itself)
+- the configured primitive consumer may be passed as the first argument to a type whose first generic parameter is `extends Monad` (including the configured primitive consumer itself)
 
 When used on the left side of `extends`, the right side is usually a tuple of the form:
 
-- `[infer T extends MonadClassFromSettings, ...]`
+- `[infer T extends Monad, ...]`
 
 Additionally, only for the configured primitive consumer, the direct root conditional form is allowed:
 
-- `ConsumerFromSettings<M> extends infer NextMonad extends MonadClassFromSettings ? ... : ...`
+- `Consumer<M> extends infer NextMonad extends Monad ? ... : ...`
 
 The configured primitive consumer may also be used as the first element of a tuple on the left side of `extends` in a conditional, when that `extends` right side uses the same monad tuple pattern.
 
@@ -69,11 +74,11 @@ This keeps the same guardrails as tuple wrapping while making that wrapper unnec
 
 ### User producer invocation rules
 
-For user producers (type aliases with monad input whose terminal returns are `[monad, result, ...rest]` / `readonly [monad, result, ...rest]` or `never`, with tuple length >= 2), a producer call is only allowed in two places:
+For user producers (type aliases with monad input whose terminal returns are `[monad, result, ...rest]` / `readonly [monad, result, ...rest]` or `never`, with tuple length >= 2), a producer call may only appear in these positions:
 
 - immediate terminal return of another user producer:
 - `type R<M extends Monad> = P<M, "x">`
-- immediate left side of conditional `extends` with tuple destructuring whose first item is `infer ... extends MonadClassFromSettings`:
+- immediate left side of conditional `extends` with tuple destructuring whose first item is `infer ... extends Monad`:
 - `type R<M extends Monad> = P<M, "x"> extends [infer M2 extends Monad, infer R2] ? ... : ...`
 
 Using a user producer call as a nested generic argument, tuple element, object field, or other wrapped position is a violation.
@@ -106,7 +111,7 @@ That applies to:
 - ordinary generic type calls
 - pseudo type shapes in the content graph such as tuples and indexed access
 
-The callee must declare its first generic parameter as monad-bound (`extends MonadClassFromSettings`).
+The callee must declare its first generic parameter as monad-bound (`extends Monad`).
 
 The one exception is the consumer return shape:
 
@@ -135,10 +140,12 @@ The checker is trying to model an expensive state-like value:
 
 ## CLI
 
-`cli/check-monad.ts` now runs `buildContentGraph` + `concatContentGraphs` + `monadChecker2`.
+The **`check-monad`** binary (see `package.json` → `bin`) runs the same pipeline as the library: `buildContentGraph` per file, `concatContentGraphs`, then `getMonadViolations` from `src/monadChecker.ts`. From a clone you can run `node cli/check-monad.ts` against the TypeScript sources; from npm, run `npx check-monad` after installing **`high-order-type-monad-checker`**.
 
 Use:
 
-- `node cli/check-monad.ts <glob>... --monad <file> <marker>:<constructor>:<reader>:<consumer>`
+- `check-monad [options] <glob> [<glob> ...] --monad <file> <marker>:<constructor>:<reader>:<consumer>`
+- Options and globs may be in any order. Repeat `--monad` to check several monad configurations on one merged graph.
+- Optional: `--snippet-lines <before>[:<after>]` controls how many source lines are shown around diagnostics (see `--help`).
 
 Diagnostics are rendered from graph offsets, and when a violation has related context the CLI prints a second marked snippet underneath the main error.

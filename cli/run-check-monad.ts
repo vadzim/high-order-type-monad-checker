@@ -9,7 +9,7 @@ import { resolveDiagnosticFromOffsets, type FormatSourceSnippetOptions } from ".
 
 // CLI responsibility boundary:
 // - parse argv and read files
-// - delegate semantic decisions to buildContentGraph + monadChecker2
+// - delegate semantic decisions to buildContentGraph + monadChecker
 // - render checker diagnostics for humans
 
 class EInvalidOption extends Error {}
@@ -25,7 +25,7 @@ type CliStreams = {
 	error(message: string): void
 }
 
-const USAGE = `Usage: node check-monad.ts [options] <glob> [glob...]
+const USAGE = `Usage: check-monad [options] <glob> [glob...]
 
 Options:
   --help, -h
@@ -225,11 +225,15 @@ function parseNonNegative(raw: string, label: string): number {
 
 async function renderHelpText(): Promise<string> {
 	let readme = ""
-	try {
-		readme = await readFile(new URL("../README.md", import.meta.url), { encoding: "utf8" })
-	} catch {
-		readme = "README.md not found."
+	for (const rel of ["../README.md", "../../README.md"]) {
+		try {
+			readme = await readFile(new URL(rel, import.meta.url), { encoding: "utf8" })
+			break
+		} catch {
+			// try next candidate (cli/ vs dist/cli/)
+		}
 	}
+	if (!readme) readme = "README.md not found."
 
 	return `${USAGE}\n\n${readme}`
 }

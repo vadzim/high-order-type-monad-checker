@@ -80,6 +80,6 @@ type Bad<M extends Monad> = Pair<M, M>
 test("cli --help prints usage and readme", async () => {
 	const out = await captureCli(["--help"])
 	assert.equal(out.status, 0, out.stderr)
-	assert.match(out.stderr, /Usage: node check-monad\.ts \[options\] <glob> \[glob\.\.\.\]/)
+	assert.match(out.stderr, /Usage: check-monad \[options\] <glob> \[glob\.\.\.\]/)
 	assert.match(out.stderr, /# monad-checker/)
 })

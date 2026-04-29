@@ -1,8 +1,22 @@
 {
-	"name": "monad-checker",
+	"name": "high-order-type-monad-checker",
 	"version": "1.0.0",
-	"description": "",
-	"main": "index.js",
+	"description": "Type-level monad-style checker on TypeScript content graphs",
+	"type": "module",
+	"files": [
+		"dist"
+	],
+	"main": "./dist/src/index.js",
+	"types": "./dist/src/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/src/index.d.ts",
+			"import": "./dist/src/index.js"
+		}
+	},
+	"bin": {
+		"check-monad": "./dist/cli/check-monad.js"
+	},
 	"directories": {
 		"doc": "docs",
 		"test": "test"
@@ -10,26 +24,33 @@
 	"scripts": {
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
-		"test": "npm run --silent typecheck && node --test test/*.test.ts",
-		"check-external": "node cli/check-monad.ts --snippet-lines 10:10 '../jsql/src/**/*.ts' '../jsql/core/**/*.ts' --monad ../jsql/core/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
-		"check-external-1": "node cli/check-monad.ts --snippet-lines 5:5 '../jsql/core/sql-tokens.ts' --monad ../jsql/core/sql-tokens.ts TokensList:ParseSqlTokens:PeekToken:SkipToken",
-		"build": "tsc -p tsconfig.json",
+		"build": "tsc -p tsconfig.build.json",
+		"prepublishOnly": "npm run build",
+		"test": "npm run --silent typecheck && node --test test/*.test.ts && npm run --silent format:check",
 		"typecheck": "tsgo -p tsconfig.json --noEmit"
 	},
-	"keywords": [],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/vadzim/high-order-type-monad-checker.git"
+	},
+	"keywords": [
+		"typescript",
+		"monad",
+		"type-checker",
+		"static-analysis"
+	],
 	"author": "",
 	"license": "ISC",
-	"type": "module",
 	"dependencies": {
 		"core-js": "^3.49.0",
 		"fast-glob": "^3.3.3",
-		"tsx": "^4.21.0",
 		"typescript": "^6.0.3"
 	},
 	"devDependencies": {
 		"@types/core-js": "^2.5.8",
 		"@types/node": "^25.6.0",
 		"@typescript/native-preview": "^7.0.0-dev.20260414.1",
-		"prettier": "^3.8.2"
+		"prettier": "^3.8.2",
+		"tsx": "^4.21.0"
 	}
 }

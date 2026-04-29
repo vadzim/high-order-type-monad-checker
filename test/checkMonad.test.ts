@@ -155,7 +155,9 @@ test("checkMonad rule matrix", async t => {
 							"Expected wrapper context in related chain",
 						)
 						assert.ok(
-							relatedMessages.some(message => message.includes("Expected immediate terminal return position")),
+							relatedMessages.some(message =>
+								message.includes("Expected immediate terminal return position"),
+							),
 							"Expected allowed-position guidance in related chain",
 						)
 					}
