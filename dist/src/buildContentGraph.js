@@ -1,0 +1,674 @@
+import ts from "typescript";
+import { dirname, join } from "node:path";
+export function buildContentGraph(filePath, content) {
+    return new ContentGraphBuilder(filePath, content).getContentGraph();
+}
+class ContentGraphBuilder {
+    filePath;
+    sourceFile;
+    graph;
+    globalScope;
+    fileScope;
+    externalTypes;
+    constructor(filePath, content) {
+        this.filePath = filePath;
+        this.sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+        this.graph = { types: new Set(), scopes: new Set(), refs: new Set(), calls: new Set() };
+        this.globalScope = this.createScope("global", "<global>", this.sourceFile, null, true);
+        this.fileScope = this.createScope("file", this.filePath, this.sourceFile, this.globalScope);
+        this.externalTypes = new Map();
+    }
+    // Entry point
+    getContentGraph() {
+        for (const statement of this.sourceFile.statements) {
+            if (ts.isImportDeclaration(statement))
+                this.addImportTypes(statement);
+        }
+        this.predeclareTopLevelTypes();
+        for (const statement of this.sourceFile.statements) {
+            if (ts.isTypeAliasDeclaration(statement))
+                this.parseTypeAlias(statement);
+            if (ts.isInterfaceDeclaration(statement))
+                this.parseInterface(statement);
+            if (ts.isClassDeclaration(statement) && statement.name)
+                this.parseClass(statement);
+        }
+        for (const type of this.graph.types) {
+            const declRef = [...type.scope.types].find(r => r.ref === type && r.name === type.name);
+            if (!declRef)
+                continue;
+            for (const returnedRef of type.returns)
+                returnedRef.ref.returnedBy.add(declRef);
+        }
+        this.rebuildCallIndexes();
+        this.rebuildRecursionSets();
+        return this.graph;
+    }
+    // Graph construction primitives
+    predeclareTopLevelTypes() {
+        for (const statement of this.sourceFile.statements) {
+            if (ts.isTypeAliasDeclaration(statement))
+                this.ensureLocalDeclaredType(statement.name.text, statement.name, this.fileScope, "typeAlias");
+            if (ts.isInterfaceDeclaration(statement))
+                this.ensureLocalDeclaredType(statement.name.text, statement.name, this.fileScope, "interface");
+            if (ts.isClassDeclaration(statement) && statement.name)
+                this.ensureLocalDeclaredType(statement.name.text, statement.name, this.fileScope, "class");
+        }
+    }
+    createPosition(node) {
+        return { start: node.getStart(this.sourceFile), end: node.getEnd() };
+    }
+    createPositionByToken(node, token) {
+        if (!token)
+            return this.createPosition(node);
+        const start = node.getStart(this.sourceFile);
+        const end = node.getEnd();
+        const nodeText = this.sourceFile.text.slice(start, end);
+        const tokenOffset = nodeText.indexOf(token);
+        if (tokenOffset < 0)
+            return this.createPosition(node);
+        return { start: start + tokenOffset, end: start + tokenOffset + token.length };
+    }
+    createScope(kind, path, node, parent, zeroPosition = false) {
+        const scope = {
+            kind,
+            path,
+            position: zeroPosition ? { start: 0, end: 0 } : { start: node.getStart(), end: node.getEnd() },
+            types: new Set(),
+            calls: new Set(),
+            parent,
+        };
+        this.graph.scopes.add(scope);
+        return scope;
+    }
+    createType(name, node, scope, kind) {
+        const isSyntheticScope = scope.kind === "global" || (scope.kind === "file" && scope.parent === null);
+        const type = {
+            name,
+            position: isSyntheticScope ? { start: 0, end: 0 } : this.createPosition(node),
+            arguments: [],
+            declaration: null,
+            body: null,
+            scope,
+            kind,
+            called: new Set(),
+            returnedBy: new Set(),
+            returns: new Set(),
+            refs: new Set(),
+        };
+        this.graph.types.add(type);
+        const selfRef = this.createTypeRef(type, name, node, scope, true);
+        this.bindTypeRefToScope(scope, selfRef, node, `declaration '${name}'`);
+        if (!(scope.kind === "file" && scope.parent === null))
+            this.graph.refs.add(selfRef);
+        return type;
+    }
+    createTypeRef(ref, name, node, scope, isDeclarationRef = false) {
+        const isSyntheticDeclarationScope = scope.kind === "global" || (scope.kind === "file" && scope.parent === null);
+        const isSyntheticTarget = ref.scope.kind === "global" || (ref.scope.kind === "file" && ref.scope.parent === null);
+        const position = isDeclarationRef
+            ? isSyntheticDeclarationScope
+                ? { start: 0, end: 0 }
+                : this.createPosition(node)
+            : isSyntheticTarget
+                ? { start: 0, end: 0 }
+                : this.createPosition(node);
+        const typeRef = { ref, name, position, scope };
+        // `refs` mirrors declaration refs stored in graph.refs.
+        const shouldTrackDeclarationRef = isDeclarationRef && !(scope.kind === "file" && scope.parent === null);
+        if (shouldTrackDeclarationRef)
+            ref.refs.add(typeRef);
+        return typeRef;
+    }
+    addImportTypes(statement) {
+        if (!statement.importClause || !ts.isStringLiteral(statement.moduleSpecifier))
+            return;
+        const importPath = join(dirname(this.filePath), statement.moduleSpecifier.text);
+        const addImportedBinding = (importedName, localName, node) => {
+            const key = `${importPath}::${importedName}`;
+            let importedType = this.externalTypes.get(key);
+            if (!importedType) {
+                const importScope = this.createScope("file", importPath, node, null, true);
+                importedType = this.createType(importedName, node, importScope, "typeAlias");
+                this.externalTypes.set(key, importedType);
+            }
+            const localRef = this.createTypeRef(importedType, localName, node, this.fileScope, true);
+            this.bindTypeRefToScope(this.fileScope, localRef, node, `import '${localName}'`);
+            this.graph.refs.add(localRef);
+        };
+        if (statement.importClause.name)
+            addImportedBinding(statement.importClause.name.text, statement.importClause.name.text, statement.importClause.name);
+        if (statement.importClause.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+            for (const element of statement.importClause.namedBindings.elements) {
+                const importedName = element.propertyName?.text ?? element.name.text;
+                addImportedBinding(importedName, element.name.text, element.name);
+            }
+        }
+    }
+    // Top-level declaration parsing
+    parseTypeAlias(decl) {
+        this.parseDeclaredType(decl, "typeAlias", ({ activeScope, ownerType }) => this.collectTypeRoots([decl.type], activeScope, this.fileScope, ownerType, true));
+    }
+    parseInterface(decl) {
+        this.parseDeclaredType(decl, "interface", ({ activeScope, ownerType }) => {
+            const heritageRoots = this.collectHeritageRoots((decl.heritageClauses ?? []).flatMap(heritage => heritage.types), activeScope, this.fileScope, ownerType, true);
+            const memberRoots = this.collectTypeRoots(decl.members.flatMap(member => (ts.isPropertySignature(member) || ts.isMethodSignature(member)) && member.type
+                ? [member.type]
+                : []), activeScope, this.fileScope, ownerType, false);
+            return [...heritageRoots, ...memberRoots];
+        });
+    }
+    parseClass(decl) {
+        if (!decl.name)
+            return;
+        this.parseDeclaredType(decl, "class", ({ activeScope, ownerType }) => {
+            const heritageRoots = this.collectHeritageRoots((decl.heritageClauses ?? []).flatMap(heritage => heritage.types), activeScope, this.fileScope, ownerType, true);
+            const memberRoots = this.collectTypeRoots(decl.members.flatMap(member => {
+                if (ts.isPropertyDeclaration(member) && member.type)
+                    return [member.type];
+                if (ts.isMethodDeclaration(member) && member.type)
+                    return [member.type];
+                return [];
+            }), activeScope, this.fileScope, ownerType, false);
+            return [...heritageRoots, ...memberRoots];
+        });
+    }
+    parseDeclaredType(decl, kind, collectDeclarationBodyRoots) {
+        const nameNode = decl.name;
+        if (!nameNode)
+            return;
+        const type = this.ensureLocalDeclaredType(nameNode.text, nameNode, this.fileScope, kind);
+        const typeParameterScope = this.createTypeParameterScope(decl.typeParameters, type.scope);
+        type.arguments = this.collectTypeParameters(decl.typeParameters, typeParameterScope);
+        const activeScope = typeParameterScope ?? type.scope;
+        const bodyRoots = collectDeclarationBodyRoots({ ownerType: type, activeScope, typeParameterScope });
+        type.body = bodyRoots.at(-1) ?? null;
+        this.addDeclarationRootCall(decl, type.scope, type, bodyRoots);
+    }
+    ensureLocalDeclaredType(name, node, scope, kind) {
+        const existingRef = [...scope.types].find(r => r.name === name);
+        if (existingRef) {
+            const existing = existingRef.ref;
+            const pos = this.createPosition(node);
+            const sameDeclaration = existing.scope === scope &&
+                existing.kind === kind &&
+                existing.position.start === pos.start &&
+                existing.position.end === pos.end;
+            if (sameDeclaration)
+                return existing;
+            throw this.duplicateNameError(scope, name, node, existingRef.position, `declaration '${name}'`);
+        }
+        return this.createType(name, node, scope, kind);
+    }
+    bindTypeRefToScope(scope, ref, node, context) {
+        const existing = [...scope.types].find(existingRef => existingRef.name === ref.name);
+        if (existing && existing !== ref) {
+            throw this.duplicateNameError(scope, ref.name, node, existing.position, context);
+        }
+        scope.types.add(ref);
+    }
+    duplicateNameError(scope, name, node, existingPosition, context) {
+        const nextPosition = this.createPosition(node);
+        const scopePath = scope.path || "<unknown>";
+        return new Error(`Duplicate type name '${name}' in scope '${scopePath}' while adding ${context}. Previous at ${existingPosition.start}:${existingPosition.end}, next at ${nextPosition.start}:${nextPosition.end}.`);
+    }
+    createTypeParameterScope(typeParameters, parent) {
+        if (!typeParameters?.length)
+            return null;
+        return this.createScope("typeParameters", parent.path, typeParameters[0], parent);
+    }
+    collectTypeParameters(typeParameters, scope) {
+        if (!typeParameters || !scope)
+            return [];
+        const refs = [];
+        for (const typeParam of typeParameters) {
+            const type = this.createType(typeParam.name.text, typeParam.name, scope, "typeParameter");
+            const ref = [...scope.types].find(r => r.ref === type && r.name === type.name);
+            if (!ref)
+                continue;
+            const globalScope = this.getGlobalScope(scope);
+            const explicitDefaultCall = this.collectTypeParameterDefaultCall(typeParam, scope, globalScope, type);
+            const declarationBodyCall = explicitDefaultCall ?? this.createUnknownCall(typeParam, scope, globalScope);
+            const declarationCall = this.addTypeDeclarationCall(type, ref, declarationBodyCall, scope, typeParam, [], "infer");
+            const extendsCall = this.createExtendsConstraintCall(declarationCall, typeParam.constraint, scope, scope.parent ?? scope, globalScope, type, typeParam);
+            refs.push({ variable: ref, extends: extendsCall.arguments[1] ?? null, default: declarationBodyCall });
+        }
+        return refs;
+    }
+    // Type parameter metadata
+    collectTypeParameterDefaultCall(typeParam, scope, globalScope, ownerType) {
+        if (!typeParam.default)
+            return null;
+        const before = this.graph.calls.size;
+        this.walkTypeNode(typeParam.default, scope, scope.parent ?? scope, globalScope, ownerType, false);
+        return this.callsAddedSince(before, scope).at(-1) ?? null;
+    }
+    createExtendsConstraintCall(leftCall, constraint, scope, declarationScope, globalScope, ownerType, anchorNode) {
+        const rightCall = constraint === undefined
+            ? this.createUnknownCall(anchorNode, scope, globalScope)
+            : this.walkTypeNode(constraint, scope, declarationScope, globalScope, ownerType, false);
+        const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", anchorNode, scope);
+        return this.addCall(extendsRef, scope, [leftCall, rightCall].filter((c) => c !== null), anchorNode, "extends");
+    }
+    resolveTypeReference(name, scope) {
+        let current = scope;
+        while (current) {
+            const found = [...current.types].find(r => r.name === name);
+            if (found)
+                return found;
+            current = current.parent;
+        }
+        return null;
+    }
+    getRootScope(scope) {
+        let current = scope;
+        while (current.parent)
+            current = current.parent;
+        return current;
+    }
+    getGlobalScope(scope) {
+        const root = this.getRootScope(scope);
+        return root.kind === "global" ? root : scope;
+    }
+    getOrCreatePseudoTypeRef(name, node, scope) {
+        const rootScope = this.getRootScope(scope);
+        let pseudoRef = this.resolveTypeReference(name, rootScope);
+        if (!pseudoRef) {
+            this.createType(name, node, rootScope, "typeAlias");
+            pseudoRef = this.resolveTypeReference(name, rootScope);
+        }
+        if (!pseudoRef)
+            throw new Error(`Failed to create pseudo type ref for ${name}`);
+        if (name === "<extends>" && pseudoRef.ref.arguments.length === 0) {
+            const left = this.createType("left", node, rootScope, "typeParameter");
+            const right = this.createType("right", node, rootScope, "typeParameter");
+            const leftRef = [...rootScope.types].find(r => r.ref === left && r.name === "left");
+            const rightRef = [...rootScope.types].find(r => r.ref === right && r.name === "right");
+            if (!leftRef || !rightRef)
+                throw new Error("Failed to create <extends> pseudo arguments");
+            pseudoRef.ref.arguments = [
+                { variable: leftRef, extends: null, default: null },
+                { variable: rightRef, extends: null, default: null },
+            ];
+        }
+        return pseudoRef;
+    }
+    getOrCreateGlobalTypeRef(name, node, globalScope) {
+        const existing = this.resolveTypeReference(name, globalScope);
+        if (existing)
+            return existing;
+        this.createType(name, node, globalScope, "typeAlias");
+        const globalRef = this.resolveTypeReference(name, globalScope);
+        if (!globalRef)
+            throw new Error(`Failed to create global type ref for ${name}`);
+        return globalRef;
+    }
+    createUnknownCall(node, scope, globalScope) {
+        return this.addCall(this.getOrCreateGlobalTypeRef("unknown", node, globalScope), scope, [], node, "unknown");
+    }
+    addCall(typeRef, scope, argumentsCalls, positionNode, positionToken) {
+        const call = {
+            parent: null,
+            type: typeRef,
+            scope,
+            arguments: argumentsCalls,
+            position: positionToken
+                ? this.createPositionByToken(positionNode, positionToken)
+                : this.createPosition(positionNode),
+        };
+        for (const arg of argumentsCalls)
+            arg.parent = call;
+        this.graph.calls.add(call);
+        return call;
+    }
+    intrinsicPseudoName(node) {
+        switch (node.kind) {
+            case ts.SyntaxKind.StringKeyword:
+                return "string";
+            case ts.SyntaxKind.NumberKeyword:
+                return "number";
+            case ts.SyntaxKind.BooleanKeyword:
+                return "boolean";
+            case ts.SyntaxKind.SymbolKeyword:
+                return "symbol";
+            case ts.SyntaxKind.BigIntKeyword:
+                return "bigint";
+            case ts.SyntaxKind.ObjectKeyword:
+                return "object";
+            case ts.SyntaxKind.UndefinedKeyword:
+                return "undefined";
+            case ts.SyntaxKind.UnknownKeyword:
+                return "unknown";
+            case ts.SyntaxKind.AnyKeyword:
+                return "any";
+            case ts.SyntaxKind.NeverKeyword:
+                return "never";
+            case ts.SyntaxKind.VoidKeyword:
+                return "void";
+            default:
+                return null;
+        }
+    }
+    literalPseudoName(node) {
+        if (ts.isLiteralTypeNode(node))
+            return `<${node.literal.getText(this.sourceFile)}>`;
+        return null;
+    }
+    callsAddedSince(sizeBefore, scope) {
+        return [...this.graph.calls].slice(sizeBefore).filter(call => call.scope === scope);
+    }
+    addSyntaxPseudoCall(name, node, scope, ownerType, isReturn, argumentsCalls, positionToken) {
+        const ref = this.getOrCreatePseudoTypeRef(name, node, scope);
+        if (isReturn)
+            ownerType.returns.add(ref);
+        return this.addCall(ref, scope, argumentsCalls, node, positionToken);
+    }
+    addTypeDeclarationCall(ownerType, declarationRef, bodyCall, scope, node, extraArguments = [], positionToken) {
+        const declarationVariableCall = this.addCall(declarationRef, scope, [], node);
+        ownerType.declaration = declarationVariableCall;
+        ownerType.body = bodyCall;
+        const declarationTypeRef = this.getOrCreatePseudoTypeRef("<typeDeclaration>", node, scope);
+        return this.addCall(declarationTypeRef, scope, [declarationVariableCall, bodyCall, ...extraArguments], node, positionToken);
+    }
+    addDeclarationRootCall(declNode, declScope, ownerType, bodyRoots) {
+        if (bodyRoots.length === 0)
+            return null;
+        if (ownerType.kind === "typeAlias") {
+            const declarationRef = this.findDeclarationRef(ownerType);
+            if (!declarationRef)
+                throw new Error(`Failed to find declaration ref for ${ownerType.name}`);
+            return this.addTypeDeclarationCall(ownerType, declarationRef, bodyRoots.at(-1), declScope, declNode, ownerType.arguments
+                .map(argument => argument.variable.ref.declaration?.parent?.parent)
+                .filter((call) => call?.type.name === "<extends>"));
+        }
+        return this.addSyntaxPseudoCall("<declaration>", declNode, declScope, ownerType, false, bodyRoots);
+    }
+    findDeclarationRef(type) {
+        return [...type.scope.types].find(ref => ref.ref === type && ref.name === type.name) ?? null;
+    }
+    collectTypeRoots(nodes, scope, declarationScope, ownerType, isReturn) {
+        const roots = [];
+        for (const node of nodes) {
+            const root = this.walkTypeNode(node, scope, declarationScope, this.globalScope, ownerType, isReturn);
+            if (root)
+                roots.push(root);
+        }
+        return roots;
+    }
+    collectHeritageRoots(nodes, scope, declarationScope, ownerType, isReturn) {
+        const roots = [];
+        for (const node of nodes) {
+            const root = this.walkHeritageTypeNode(node, scope, declarationScope, this.globalScope, ownerType, isReturn);
+            if (root)
+                roots.push(root);
+        }
+        return roots;
+    }
+    resolveNamedTypeReference(name, nameNode, scope, globalScope) {
+        return this.resolveTypeReference(name, scope) ?? this.getOrCreateGlobalTypeRef(name, nameNode, globalScope);
+    }
+    walkTypeReferenceNode(node, scope, declarationScope, globalScope, ownerType, isReturn) {
+        const nameNode = node.typeName;
+        if (!ts.isIdentifier(nameNode))
+            return null;
+        const ref = this.resolveNamedTypeReference(nameNode.text, nameNode, scope, globalScope);
+        if (isReturn)
+            ownerType.returns.add(ref);
+        const argCalls = [];
+        for (const arg of node.typeArguments ?? []) {
+            const root = this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false);
+            if (root)
+                argCalls.push(root);
+        }
+        return this.addCall(ref, scope, argCalls, nameNode);
+    }
+    walkHeritageTypeNode(node, scope, declarationScope, globalScope, ownerType, isReturn) {
+        const expr = node.expression;
+        if (!ts.isIdentifier(expr))
+            return null;
+        const ref = this.resolveNamedTypeReference(expr.text, expr, scope, globalScope);
+        if (isReturn)
+            ownerType.returns.add(ref);
+        const argCalls = [];
+        for (const arg of node.typeArguments ?? []) {
+            const root = this.walkTypeNode(arg, scope, declarationScope, globalScope, ownerType, false);
+            if (root)
+                argCalls.push(root);
+        }
+        return this.addCall(ref, scope, argCalls, expr);
+    }
+    walkTypeLiteralNode(node, scope, declarationScope, globalScope, ownerType, isReturn) {
+        const pairRoots = [];
+        for (const member of node.members) {
+            if ((ts.isPropertySignature(member) || ts.isMethodSignature(member)) &&
+                member.type &&
+                member.name &&
+                (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) {
+                const memberName = ts.isIdentifier(member.name) ? member.name.text : member.name.text;
+                const keyRef = this.getOrCreatePseudoTypeRef(`<${JSON.stringify(memberName)}>`, member.name, scope);
+                const keyCall = this.addCall(keyRef, scope, [], member.name);
+                const valueRoot = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false);
+                const pairTypeName = ts.isPropertySignature(member) && this.hasReadonlyModifier(member) ? "<readonlyPair>" : "<pair>";
+                pairRoots.push(this.addSyntaxPseudoCall(pairTypeName, member.type, scope, ownerType, false, [keyCall, ...(valueRoot ? [valueRoot] : [])], ":"));
+                continue;
+            }
+            if (ts.isCallSignatureDeclaration(member) && member.type) {
+                const root = this.walkTypeNode(member.type, scope, declarationScope, globalScope, ownerType, false);
+                if (root)
+                    pairRoots.push(root);
+            }
+        }
+        return this.addSyntaxPseudoCall("<object>", node, scope, ownerType, isReturn, pairRoots, "{");
+    }
+    hasReadonlyModifier(node) {
+        if (!ts.canHaveModifiers(node))
+            return false;
+        return ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.ReadonlyKeyword) ?? false;
+    }
+    walkTupleTypeNode(node, scope, declarationScope, globalScope, ownerType, isReturn, readonly = false) {
+        const tupleRef = this.getOrCreatePseudoTypeRef(readonly ? "<readonlyTuple>" : "<tuple>", node, scope);
+        if (isReturn)
+            ownerType.returns.add(tupleRef);
+        const roots = [];
+        for (const element of node.elements) {
+            if (ts.isTypeNode(element)) {
+                const root = this.walkTypeNode(element, scope, declarationScope, globalScope, ownerType, false);
+                if (root)
+                    roots.push(root);
+            }
+        }
+        return this.addCall(tupleRef, scope, roots, node, "[");
+    }
+    walkConditionalTypeNode(node, scope, globalScope, ownerType, isReturn) {
+        const conditionalScope = this.createScope("conditional", scope.path, node, scope);
+        const checkRoot = this.walkTypeNode(node.checkType, conditionalScope, conditionalScope, globalScope, ownerType, false);
+        const extendsTypeRoot = this.walkTypeNode(node.extendsType, conditionalScope, conditionalScope, globalScope, ownerType, false);
+        const extendsRef = this.getOrCreatePseudoTypeRef("<extends>", node, conditionalScope);
+        const extendsCall = this.addCall(extendsRef, conditionalScope, [checkRoot, extendsTypeRoot].filter((call) => call !== null), node, "extends");
+        const trueScope = this.createScope("branchTrue", conditionalScope.path, node.trueType, conditionalScope);
+        const trueRoot = this.collectScopedRoot(node.trueType, trueScope, globalScope, ownerType, true);
+        const falseScope = this.createScope("branchFalse", scope.path, node.falseType, scope);
+        const falseRoot = this.collectScopedRoot(node.falseType, falseScope, globalScope, ownerType, true);
+        const conditionalRef = this.getOrCreatePseudoTypeRef("<conditional>", node, scope);
+        if (isReturn)
+            ownerType.returns.add(conditionalRef);
+        return this.addCall(conditionalRef, scope, [extendsCall, trueRoot, falseRoot].filter((call) => call !== null), node, "extends");
+    }
+    collectScopedRoot(node, scope, globalScope, ownerType, isReturn) {
+        const callsBefore = this.graph.calls.size;
+        this.walkTypeNode(node, scope, scope, globalScope, ownerType, isReturn);
+        return this.callsAddedSince(callsBefore, scope).at(-1) ?? null;
+    }
+    walkInferTypeNode(node, declarationScope, globalScope, ownerType) {
+        this.ensureLocalDeclaredType(node.typeParameter.name.text, node.typeParameter.name, declarationScope, "infer");
+        const inferredRef = this.resolveTypeReference(node.typeParameter.name.text, declarationScope);
+        const inferCall = inferredRef
+            ? this.addTypeDeclarationCall(inferredRef.ref, inferredRef, this.createUnknownCall(node, declarationScope, globalScope), declarationScope, node, [], "infer")
+            : null;
+        return this.createExtendsConstraintCall(inferCall, node.typeParameter.constraint, declarationScope, declarationScope, globalScope, ownerType, node);
+    }
+    walkTypeNode(node, scope, declarationScope, globalScope, ownerType, isReturn) {
+        if (ts.isTypeReferenceNode(node))
+            return this.walkTypeReferenceNode(node, scope, declarationScope, globalScope, ownerType, isReturn);
+        const intrinsicName = this.intrinsicPseudoName(node);
+        if (intrinsicName) {
+            const ref = this.getOrCreateGlobalTypeRef(intrinsicName, node, globalScope);
+            if (isReturn)
+                ownerType.returns.add(ref);
+            return this.addCall(ref, scope, [], node, intrinsicName);
+        }
+        const literalName = this.literalPseudoName(node);
+        if (literalName) {
+            const ref = this.getOrCreateGlobalTypeRef(literalName, node, globalScope);
+            if (isReturn)
+                ownerType.returns.add(ref);
+            const literalToken = ts.isLiteralTypeNode(node) ? node.literal.getText(this.sourceFile) : undefined;
+            return this.addCall(ref, scope, [], node, literalToken);
+        }
+        if (ts.isTupleTypeNode(node))
+            return this.walkTupleTypeNode(node, scope, declarationScope, globalScope, ownerType, isReturn);
+        if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
+            const roots = [];
+            for (const part of node.types) {
+                const root = this.walkTypeNode(part, scope, declarationScope, globalScope, ownerType, isReturn);
+                if (root)
+                    roots.push(root);
+            }
+            return this.addSyntaxPseudoCall(ts.isUnionTypeNode(node) ? "<union>" : "<intersection>", node, scope, ownerType, isReturn, roots, ts.isUnionTypeNode(node) ? "|" : "&");
+        }
+        if (ts.isArrayTypeNode(node)) {
+            const root = this.walkTypeNode(node.elementType, scope, declarationScope, globalScope, ownerType, isReturn);
+            return this.addSyntaxPseudoCall("<array>", node, scope, ownerType, isReturn, root ? [root] : [], "[");
+        }
+        if (ts.isParenthesizedTypeNode(node)) {
+            const root = this.walkTypeNode(node.type, scope, declarationScope, globalScope, ownerType, isReturn);
+            return this.addSyntaxPseudoCall("<parenthesized>", node, scope, ownerType, isReturn, root ? [root] : [], "(");
+        }
+        if (ts.isTypeOperatorNode(node)) {
+            if (node.operator === ts.SyntaxKind.ReadonlyKeyword) {
+                if (ts.isTupleTypeNode(node.type))
+                    return this.walkTupleTypeNode(node.type, scope, declarationScope, globalScope, ownerType, isReturn, true);
+                if (ts.isArrayTypeNode(node.type)) {
+                    const root = this.walkTypeNode(node.type.elementType, scope, declarationScope, globalScope, ownerType, false);
+                    return this.addSyntaxPseudoCall("<readonlyArray>", node, scope, ownerType, isReturn, root ? [root] : [], "readonly");
+                }
+            }
+            const roots = [];
+            ts.forEachChild(node, child => {
+                if (ts.isTypeNode(child)) {
+                    const root = this.walkTypeNode(child, scope, declarationScope, globalScope, ownerType, false);
+                    if (root)
+                        roots.push(root);
+                }
+            });
+            const operatorToken = ts.tokenToString(node.operator) ?? "typeof";
+            return this.addSyntaxPseudoCall("<typeOperator>", node, scope, ownerType, isReturn, roots, operatorToken);
+        }
+        if (ts.isIndexedAccessTypeNode(node)) {
+            const roots = [];
+            const objectRoot = this.walkTypeNode(node.objectType, scope, declarationScope, globalScope, ownerType, false);
+            if (objectRoot)
+                roots.push(objectRoot);
+            const indexRoot = this.walkTypeNode(node.indexType, scope, declarationScope, globalScope, ownerType, false);
+            if (indexRoot)
+                roots.push(indexRoot);
+            return this.addSyntaxPseudoCall("<indexedAccess>", node, scope, ownerType, isReturn, roots, "[");
+        }
+        if (ts.isTypeLiteralNode(node))
+            return this.walkTypeLiteralNode(node, scope, declarationScope, globalScope, ownerType, isReturn);
+        if (ts.isConditionalTypeNode(node))
+            return this.walkConditionalTypeNode(node, scope, globalScope, ownerType, isReturn);
+        if (ts.isInferTypeNode(node))
+            return this.walkInferTypeNode(node, declarationScope, globalScope, ownerType);
+        const fallbackArgs = [];
+        ts.forEachChild(node, child => {
+            if (ts.isTypeNode(child)) {
+                const root = this.walkTypeNode(child, scope, declarationScope, globalScope, ownerType, false);
+                if (root)
+                    fallbackArgs.push(root);
+            }
+        });
+        if (fallbackArgs.length > 0)
+            return this.addSyntaxPseudoCall("<syntax>", node, scope, ownerType, isReturn, fallbackArgs);
+        return null;
+    }
+    // Index maintenance
+    rebuildCallIndexes() {
+        for (const scope of this.graph.scopes)
+            scope.calls.clear();
+        for (const type of this.graph.types)
+            type.called.clear();
+        for (const call of this.graph.calls) {
+            call.scope.calls.add(call);
+            call.type.ref.called.add(call);
+        }
+    }
+    rebuildRecursionSets() {
+        for (const type of this.graph.types)
+            delete type.recursion;
+        const nodes = Array.from(this.graph.types).filter(type => (type.kind === "typeAlias" || type.kind === "interface" || type.kind === "class") && type.body !== null);
+        const nodeSet = new Set(nodes);
+        const edges = new Map(nodes.map(type => [
+            type,
+            new Set(Array.from(this.walkCalls(type.body)).flatMap(call => nodeSet.has(call.type.ref) ? [call.type.ref] : [])),
+        ]));
+        const components = stronglyConnectedComponents(nodes, type => edges.get(type) ?? new Set());
+        for (const component of components) {
+            const recursive = component.length > 1 || component.some(type => edges.get(type)?.has(type) === true);
+            if (!recursive)
+                continue;
+            const recursionSet = new Set(component);
+            for (const type of component)
+                type.recursion = recursionSet;
+        }
+    }
+    *walkCalls(call) {
+        if (!call)
+            return;
+        yield call;
+        for (const argument of call.arguments)
+            yield* this.walkCalls(argument);
+    }
+}
+function stronglyConnectedComponents(nodes, edges) {
+    let index = 0;
+    const indices = new Map();
+    const lowLinks = new Map();
+    const stack = [];
+    const onStack = new Set();
+    const components = [];
+    function visit(node) {
+        indices.set(node, index);
+        lowLinks.set(node, index);
+        index += 1;
+        stack.push(node);
+        onStack.add(node);
+        for (const next of edges(node)) {
+            if (!indices.has(next)) {
+                visit(next);
+                lowLinks.set(node, Math.min(lowLinks.get(node), lowLinks.get(next)));
+                continue;
+            }
+            if (onStack.has(next)) {
+                lowLinks.set(node, Math.min(lowLinks.get(node), indices.get(next)));
+            }
+        }
+        if (lowLinks.get(node) !== indices.get(node))
+            return;
+        const component = [];
+        while (stack.length > 0) {
+            const member = stack.pop();
+            onStack.delete(member);
+            component.push(member);
+            if (member === node)
+                break;
+        }
+        components.push(component);
+    }
+    for (const node of nodes) {
+        if (indices.has(node))
+            continue;
+        visit(node);
+    }
+    return components;
+}

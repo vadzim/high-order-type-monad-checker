@@ -81,5 +81,5 @@ test("cli --help prints usage and readme", async () => {
 	const out = await captureCli(["--help"])
 	assert.equal(out.status, 0, out.stderr)
 	assert.match(out.stderr, /Usage: check-monad \[options\] <glob> \[glob\.\.\.\]/)
-	assert.match(out.stderr, /# monad-checker/)
+	assert.match(out.stderr, /# high-order-type-monad-checker/)
 })
