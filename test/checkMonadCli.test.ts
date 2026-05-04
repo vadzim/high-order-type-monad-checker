@@ -93,26 +93,7 @@ test("cli --help prints usage and readme", async () => {
 	assert.match(out.stderr, /# high-order-type-monad-checker/)
 })
 
-test("cli --strict fails when --monad module is not loaded", async () => {
-	await withTempDir(async dirPath => {
-		const monadPath = path.join(dirPath, "monad.ts")
-		const samplePath = path.join(dirPath, "sample.ts")
-		await writeFile(monadPath, monadModule, "utf8")
-		await writeFile(
-			samplePath,
-			`type Irrelevant = string
-`,
-			"utf8",
-		)
-
-		const out = await captureCli(["--strict", samplePath, "--monad", monadPath, "Monad:MCreate:MRead:MNext"])
-		assert.equal(out.status, 1, out.stderr)
-		assert.match(out.stderr, /Strict mode failed: module from --monad is not loaded by globs:/)
-		assert.match(out.stderr, new RegExp(monadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
-	})
-})
-
-test("cli without --strict allows --monad module outside loaded globs", async () => {
+test("cli is strict by default and fails when --monad module is not loaded", async () => {
 	await withTempDir(async dirPath => {
 		const monadPath = path.join(dirPath, "monad.ts")
 		const samplePath = path.join(dirPath, "sample.ts")
@@ -125,6 +106,25 @@ test("cli without --strict allows --monad module outside loaded globs", async ()
 		)
 
 		const out = await captureCli([samplePath, "--monad", monadPath, "Monad:MCreate:MRead:MNext"])
+		assert.equal(out.status, 1, out.stderr)
+		assert.match(out.stderr, /Strict mode failed: module from --monad is not loaded by globs:/)
+		assert.match(out.stderr, new RegExp(monadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+	})
+})
+
+test("cli --no-strict allows --monad module outside loaded globs", async () => {
+	await withTempDir(async dirPath => {
+		const monadPath = path.join(dirPath, "monad.ts")
+		const samplePath = path.join(dirPath, "sample.ts")
+		await writeFile(monadPath, monadModule, "utf8")
+		await writeFile(
+			samplePath,
+			`type Irrelevant = string
+`,
+			"utf8",
+		)
+
+		const out = await captureCli(["--no-strict", samplePath, "--monad", monadPath, "Monad:MCreate:MRead:MNext"])
 		assert.equal(out.status, 0, out.stderr)
 		assert.match(out.stderr, /Found 0 errors\./)
 	})
