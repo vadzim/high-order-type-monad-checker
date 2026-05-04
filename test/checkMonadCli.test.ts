@@ -28,6 +28,15 @@ async function withTempFile(source: string, fn: (filePath: string) => void | Pro
 	}
 }
 
+async function withTempDir(fn: (dirPath: string) => void | Promise<void>) {
+	const dir = await mkdtemp(path.join(tmpdir(), "monad-checker-cli-"))
+	try {
+		await fn(dir)
+	} finally {
+		await rm(dir, { recursive: true, force: true })
+	}
+}
+
 async function captureCli(args: string[]) {
 	const messages: string[] = []
 	const status = await runCli(args, {
@@ -82,4 +91,41 @@ test("cli --help prints usage and readme", async () => {
 	assert.equal(out.status, 0, out.stderr)
 	assert.match(out.stderr, /Usage: check-monad \[options\] <glob> \[glob\.\.\.\]/)
 	assert.match(out.stderr, /# high-order-type-monad-checker/)
+})
+
+test("cli --strict fails when --monad module is not loaded", async () => {
+	await withTempDir(async dirPath => {
+		const monadPath = path.join(dirPath, "monad.ts")
+		const samplePath = path.join(dirPath, "sample.ts")
+		await writeFile(monadPath, monadModule, "utf8")
+		await writeFile(
+			samplePath,
+			`type Irrelevant = string
+`,
+			"utf8",
+		)
+
+		const out = await captureCli(["--strict", samplePath, "--monad", monadPath, "Monad:MCreate:MRead:MNext"])
+		assert.equal(out.status, 1, out.stderr)
+		assert.match(out.stderr, /Strict mode failed: module from --monad is not loaded by globs:/)
+		assert.match(out.stderr, new RegExp(monadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+	})
+})
+
+test("cli without --strict allows --monad module outside loaded globs", async () => {
+	await withTempDir(async dirPath => {
+		const monadPath = path.join(dirPath, "monad.ts")
+		const samplePath = path.join(dirPath, "sample.ts")
+		await writeFile(monadPath, monadModule, "utf8")
+		await writeFile(
+			samplePath,
+			`type Irrelevant = string
+`,
+			"utf8",
+		)
+
+		const out = await captureCli([samplePath, "--monad", monadPath, "Monad:MCreate:MRead:MNext"])
+		assert.equal(out.status, 0, out.stderr)
+		assert.match(out.stderr, /Found 0 errors\./)
+	})
 })

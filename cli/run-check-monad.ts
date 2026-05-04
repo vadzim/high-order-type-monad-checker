@@ -18,6 +18,7 @@ type ParsedCli = {
 	globs: string[]
 	options: FormatSourceSnippetOptions
 	monadTypes: MonadTypeOption[]
+	strict: boolean
 }
 
 type CliStreams = {
@@ -36,6 +37,9 @@ Options:
       <before> counts snippet lines up to marker line (inclusive).
       <after> counts lines after marker line.
       Examples: 7, 7:2, :2.
+
+  --strict
+      Fail when a module specified via --monad is not loaded by globs.
 
 Repeatable options:
   --monad <file> <type-name>:<constructor-name>:<reader-name>:<consumer-name>
@@ -72,11 +76,28 @@ export async function runCli(argv: string[], streams: CliStreams = console) {
 				paths.map(async filePath => [filePath, await readFile(filePath, { encoding: "utf8" })] as const),
 			),
 		)
+		if (cli.strict) {
+			const loadedFiles = new Set(paths.map(filePath => path.resolve(filePath)))
+			const missingMonadModules = Array.from(
+				new Set(
+					cli.monadTypes
+						.map(monadType => monadType.path)
+						.filter(monadPath => !loadedFiles.has(path.resolve(monadPath))),
+				),
+			)
+			if (missingMonadModules.length > 0) {
+				throw new EInvalidOption(
+					`Strict mode failed: module from --monad is not loaded by globs: ${missingMonadModules.join(", ")}`,
+				)
+			}
+		}
 
 		const graph = concatContentGraphs(
 			files.entries().map(([filePath, content]) => buildContentGraph(filePath, content)),
 		)
-		const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, monadType))
+		const violations = cli.monadTypes.flatMap(monadType =>
+			getMonadViolations(graph, { ...monadType, strictMonadModule: cli.strict }),
+		)
 
 		let errorCount = 0
 		const emittedViolations: typeof violations = []
@@ -150,6 +171,7 @@ function parseCli(argv: string[]): ParsedCli {
 	const globs: string[] = []
 	const monadSpecs: MonadTypeOption[] = []
 	let options: FormatSourceSnippetOptions = { contextBefore: 4, contextAfter: 0 }
+	let strict = false
 
 	let i = 0
 	while (i < argv.length) {
@@ -187,6 +209,11 @@ function parseCli(argv: string[]): ParsedCli {
 			i += 3
 			continue
 		}
+		if (token === "--strict") {
+			strict = true
+			i += 1
+			continue
+		}
 		if (token.startsWith("--")) {
 			throw new EInvalidOption(`Unknown option '${token}'.`)
 		}
@@ -198,6 +225,7 @@ function parseCli(argv: string[]): ParsedCli {
 		globs,
 		options,
 		monadTypes: monadSpecs,
+		strict,
 	}
 }
 
