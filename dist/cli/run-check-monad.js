@@ -24,8 +24,8 @@ Options:
       <after> counts lines after marker line.
       Examples: 7, 7:2, :2.
 
-  --strict
-      Fail when a module specified via --monad is not loaded by globs.
+  --no-strict
+      Disable strict mode and allow --monad modules outside loaded globs.
 
 Repeatable options:
   --monad <file> <type-name>:<constructor-name>:<reader-name>:<consumer-name>
@@ -132,7 +132,7 @@ function parseCli(argv) {
     const globs = [];
     const monadSpecs = [];
     let options = { contextBefore: 4, contextAfter: 0 };
-    let strict = false;
+    let strict = true;
     let i = 0;
     while (i < argv.length) {
         const token = argv[i];
@@ -167,8 +167,8 @@ function parseCli(argv) {
             i += 3;
             continue;
         }
-        if (token === "--strict") {
-            strict = true;
+        if (token === "--no-strict") {
+            strict = false;
             i += 1;
             continue;
         }
