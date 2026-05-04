@@ -24,6 +24,9 @@ Options:
       <after> counts lines after marker line.
       Examples: 7, 7:2, :2.
 
+  --strict
+      Fail when a module specified via --monad is not loaded by globs.
+
 Repeatable options:
   --monad <file> <type-name>:<constructor-name>:<reader-name>:<consumer-name>
       Configure the marker monad type and the three primitive operations.
@@ -51,8 +54,17 @@ export async function runCli(argv, streams = console) {
             throw new EInvalidOption("No files matched the provided globs.");
         }
         const files = new Map(await Promise.all(paths.map(async (filePath) => [filePath, await readFile(filePath, { encoding: "utf8" })])));
+        if (cli.strict) {
+            const loadedFiles = new Set(paths.map(filePath => path.resolve(filePath)));
+            const missingMonadModules = Array.from(new Set(cli.monadTypes
+                .map(monadType => monadType.path)
+                .filter(monadPath => !loadedFiles.has(path.resolve(monadPath)))));
+            if (missingMonadModules.length > 0) {
+                throw new EInvalidOption(`Strict mode failed: module from --monad is not loaded by globs: ${missingMonadModules.join(", ")}`);
+            }
+        }
         const graph = concatContentGraphs(files.entries().map(([filePath, content]) => buildContentGraph(filePath, content)));
-        const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, monadType));
+        const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, { ...monadType, strictMonadModule: cli.strict }));
         let errorCount = 0;
         const emittedViolations = [];
         for (const violation of violations) {
@@ -120,6 +132,7 @@ function parseCli(argv) {
     const globs = [];
     const monadSpecs = [];
     let options = { contextBefore: 4, contextAfter: 0 };
+    let strict = false;
     let i = 0;
     while (i < argv.length) {
         const token = argv[i];
@@ -154,6 +167,11 @@ function parseCli(argv) {
             i += 3;
             continue;
         }
+        if (token === "--strict") {
+            strict = true;
+            i += 1;
+            continue;
+        }
         if (token.startsWith("--")) {
             throw new EInvalidOption(`Unknown option '${token}'.`);
         }
@@ -164,6 +182,7 @@ function parseCli(argv) {
         globs,
         options,
         monadTypes: monadSpecs,
+        strict,
     };
 }
 function parseSnippetLines(input) {
