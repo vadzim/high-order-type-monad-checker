@@ -146,6 +146,22 @@ type B<M extends Monad, C extends 0 | 1 = 0> = C extends 0 ? MGet<M> : A<M, 0>;
 		source: `type Bad<M extends Monad> = { head: MNext<M>, tail: MNext<M> };`,
 	},
 	{
+		name: "ok: monad consumer from settings can be used in place of monad",
+		source: `type Ok<M extends Monad> = [MNext<M>, 1, 2, 3];`,
+	},
+	{
+		name: "ok: monad consumer from settings can be used in place of monad 2",
+		source: `type Ok<M extends Monad> = MRead<M> extends number ? [MNext<M>, 1, 2, 3] : [M, 3, 4, 5];`,
+	},
+	{
+		name: "ok: user consumer should return the same number of elements in tuple",
+		source: `type X<M extends Monad> = [M, 3, 4, 5]; type Fail<M extends Monad> = MRead<M> extends number ? [MNext<M>, 1, 2, 3] : X<M>;`,
+	},
+	{
+		name: "fail: user consumer should return the same number of elements in tuple",
+		source: `type X<M extends Monad> = [M, 3, 4]; type Fail<M extends Monad> = MRead<M> extends number ? [MNext<M>, 1, 2, 3] : X<M>;`,
+	},
+	{
 		name: "ok: monad can be consumed in a conditional infer constraint in a first arg of a tuple",
 		source: `type Ok<M extends Monad> = [MNext<M>] extends [infer X extends Monad] ? [X, 1] : never;`,
 	},

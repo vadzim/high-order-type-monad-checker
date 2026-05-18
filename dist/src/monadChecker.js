@@ -435,6 +435,66 @@ export function getMonadViolations(graph, options) {
             }
         }
     }
+    // Check that conditional branches with monad consumers in tuples have consistent tuple lengths
+    for (const type of graph.types) {
+        if (type.kind !== "typeAlias")
+            continue;
+        if (type === monadConstructor || type === monadReader || type === monadConsumer)
+            continue;
+        if (!hasMonadInput(type))
+            continue;
+        const typeBody = body(type);
+        if (!typeBody || typeBody.type.name !== "<conditional>")
+            continue;
+        const conditional = typeBody;
+        const trueRoot = conditional.arguments[1];
+        const falseRoot = conditional.arguments[2];
+        if (!trueRoot || !falseRoot)
+            continue;
+        // Check if either branch has a consumer call in a tuple
+        const trueTupleWithConsumer = getTupleWithConsumer(trueRoot);
+        const falseTupleWithConsumer = getTupleWithConsumer(falseRoot);
+        if (trueTupleWithConsumer && !falseTupleWithConsumer) {
+            // True branch has consumer in tuple, check false branch tuple length
+            const falseTuple = resolveTupleCall(falseRoot);
+            if (falseTuple && falseTuple.arguments.length !== trueTupleWithConsumer.arguments.length) {
+                violations.push({
+                    owner: callToOwner.get(conditional) ?? type,
+                    violation: {
+                        kind: "conditional.inconsistentTupleLengthWithConsumer",
+                        message: `Tuple length mismatch: true branch has ${trueTupleWithConsumer.arguments.length} elements with monad consumer, but false branch has ${falseTuple.arguments.length} elements`,
+                        position: falseTuple.position,
+                        path: falseTuple.scope.path,
+                        related: related({
+                            message: `True branch tuple with consumer has ${trueTupleWithConsumer.arguments.length} elements`,
+                            position: trueTupleWithConsumer.position,
+                            path: trueTupleWithConsumer.scope.path,
+                        }),
+                    },
+                });
+            }
+        }
+        else if (falseTupleWithConsumer && !trueTupleWithConsumer) {
+            // False branch has consumer in tuple, check true branch tuple length
+            const trueTuple = resolveTupleCall(trueRoot);
+            if (trueTuple && trueTuple.arguments.length !== falseTupleWithConsumer.arguments.length) {
+                violations.push({
+                    owner: callToOwner.get(conditional) ?? type,
+                    violation: {
+                        kind: "conditional.inconsistentTupleLengthWithConsumer",
+                        message: `Tuple length mismatch: false branch has ${falseTupleWithConsumer.arguments.length} elements with monad consumer, but true branch has ${trueTuple.arguments.length} elements`,
+                        position: trueTuple.position,
+                        path: trueTuple.scope.path,
+                        related: related({
+                            message: `False branch tuple with consumer has ${falseTupleWithConsumer.arguments.length} elements`,
+                            position: falseTupleWithConsumer.position,
+                            path: falseTupleWithConsumer.scope.path,
+                        }),
+                    },
+                });
+            }
+        }
+    }
     const ownerKinds = new Map();
     const ownerViolations = new Map();
     for (const record of violations) {
@@ -953,6 +1013,44 @@ export function getMonadViolations(graph, options) {
         // Pattern: [MNext<M>] extends [infer X extends Monad] ? ... : never
         if (leftSide && (leftSide.type.name === "<tuple>" || leftSide.type.name === "<readonlyTuple>")) {
             return true;
+        }
+        return false;
+    }
+    function getTupleWithConsumer(root) {
+        // Check if root is directly a tuple with consumer
+        if (root.type.name === "<tuple>" || root.type.name === "<readonlyTuple>") {
+            if (hasMonadConsumerInTuple(root))
+                return root;
+        }
+        // Check if root is a type reference that resolves to a tuple with consumer
+        if (root.type.ref && root.type.ref.kind === "typeAlias") {
+            const resolvedBody = body(root.type.ref);
+            if (resolvedBody && (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
+                if (hasMonadConsumerInTuple(resolvedBody))
+                    return resolvedBody;
+            }
+        }
+        return null;
+    }
+    function resolveTupleCall(root) {
+        // Check if root is directly a tuple
+        if (root.type.name === "<tuple>" || root.type.name === "<readonlyTuple>") {
+            return root;
+        }
+        // Check if root is a type reference that resolves to a tuple
+        if (root.type.ref && root.type.ref.kind === "typeAlias") {
+            const resolvedBody = body(root.type.ref);
+            if (resolvedBody && (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
+                return resolvedBody;
+            }
+        }
+        return null;
+    }
+    function hasMonadConsumerInTuple(tuple) {
+        // Check if any element in the tuple is a monad consumer call
+        for (const arg of tuple.arguments) {
+            if (arg.type.ref === monadConsumer)
+                return true;
         }
         return false;
     }
