@@ -924,6 +924,7 @@ export function getMonadViolations(graph, options) {
         // is allowed to use never as fallback
         if (extendsCall.type.name !== "<extends>")
             return false;
+        const leftSide = extendsCall.arguments[0];
         const rightSide = extendsCall.arguments[1];
         if (!rightSide)
             return false;
@@ -947,6 +948,11 @@ export function getMonadViolations(graph, options) {
             if (constraint && constraint.type.name !== "unknown") {
                 return true;
             }
+        }
+        // Check if left side is a tuple/array - this makes it structural pattern matching
+        // Pattern: [MNext<M>] extends [infer X extends Monad] ? ... : never
+        if (leftSide && (leftSide.type.name === "<tuple>" || leftSide.type.name === "<readonlyTuple>")) {
+            return true;
         }
         return false;
     }

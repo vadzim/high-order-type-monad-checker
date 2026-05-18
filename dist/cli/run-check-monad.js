@@ -66,7 +66,9 @@ export async function runCli(argv, streams = console) {
         const graph = concatContentGraphs(files.entries().map(([filePath, content]) => buildContentGraph(filePath, content)));
         const violations = cli.monadTypes.flatMap(monadType => getMonadViolations(graph, { ...monadType, strictMonadModule: cli.strict }));
         const formatted = violations.map(violation => formatGraphViolation(violation, files, cli.options));
-        console.error((cli.onlyOne ? formatted.slice(0, 1) : formatted).join("\n"));
+        const output = (cli.onlyOne ? formatted.slice(0, 1) : formatted).filter(f => f).join("\n");
+        if (output)
+            streams.error(output);
         const fileStats = summarizeFiles(violations, files);
         const fileCount = fileStats.length;
         const checkedFileCount = files.size;

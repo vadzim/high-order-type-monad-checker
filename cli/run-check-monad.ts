@@ -103,7 +103,8 @@ export async function runCli(argv: string[], streams: CliStreams = console) {
 		)
 
 		const formatted = violations.map(violation => formatGraphViolation(violation, files, cli.options))
-		console.error((cli.onlyOne ? formatted.slice(0, 1) : formatted).join("\n"))
+		const output = (cli.onlyOne ? formatted.slice(0, 1) : formatted).filter(f => f).join("\n")
+		if (output) streams.error(output)
 
 		const fileStats = summarizeFiles(violations, files)
 		const fileCount = fileStats.length
