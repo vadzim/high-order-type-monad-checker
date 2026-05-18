@@ -368,7 +368,7 @@ type P<A extends Monad> = [A, A];
 		source: `
 type P<A extends Monad> = [A] extends [infer X] ? A : never;
 `,
-		expectedKinds: ["monad.multipleConsumption"],
+		expectedKinds: ["conditional.monadRelatedNeverNotAllowed", "monad.multipleConsumption"],
 	},
 	{
 		name: `ok: monad variable can be used in sibling conditional branches`,
@@ -509,5 +509,50 @@ type R<A extends Monad> = MGet<A> extends [infer R extends Monad, infer H] ? R[1
 		source: `
 type R<A extends Monad> = MGet<A> extends [infer R extends Monad, infer H] ? [R, R] : never
 `,
+	},
+	{
+		name: `ok: type assignment pattern must have never in else branch`,
+		source: `
+type Bad<T> = T extends infer X ? X : string
+`,
+	},
+	{
+		name: `ok: type assignment pattern with never in else branch`,
+		source: `
+type Ok<T> = T extends infer X ? X : never
+`,
+	},
+	{
+		name: `ok: type assignment with constraint is not simple assignment`,
+		source: `
+type Ok<T> = T extends infer X extends string ? X : number
+`,
+	},
+	{
+		name: `fail: monad-related conditional should not use never in true branch`,
+		source: `
+type Bad<M extends Monad> = M extends [infer H, infer T] ? never : [M, 0]
+`,
+		expectedKinds: ["conditional.monadRelatedNeverNotAllowed", "monad.multipleConsumption"],
+	},
+	{
+		name: `fail: monad-related conditional should not use never in false branch`,
+		source: `
+type Bad<M extends Monad> = M extends [infer H, infer T] ? [M, 0] : never
+`,
+		expectedKinds: ["conditional.monadRelatedNeverNotAllowed", "monad.multipleConsumption"],
+	},
+	{
+		name: `ok: non-monad conditional can use never`,
+		source: `
+type Ok<T> = T extends string ? T : never
+`,
+	},
+	{
+		name: `fail: monad-related conditional with consumer should not use never`,
+		source: `
+type Bad<M extends Monad> = MNext<M> extends [infer M2 extends Monad, infer R] ? never : [M2, R]
+`,
+		expectedKinds: ["monad.incompatibleTypes"],
 	},
 ]
