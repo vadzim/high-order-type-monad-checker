@@ -571,4 +571,13 @@ type Bad<M extends Monad> = MNext<M> extends [infer M2 extends Monad, infer R] ?
 `,
 		expectedKinds: ["monad.incompatibleTypes"],
 	},
+	{
+		name: `ok: consumer call on inferred monad in tuple first position is valid`,
+		source: `
+type Test<M extends Monad> =
+	MNext<M> extends infer M2 extends Monad
+		? [MNext<M2>, null, "a", "b"]
+		: never
+`,
+	},
 ]

@@ -112,10 +112,10 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 
 	const monadValueTypes = new Set<CGType>()
 
-	if (monadConsumer && !monadConsumer.declaration) {
+	if (monadConsumer) {
 		monadValueTypes.add(monadConsumer)
 	}
-	if (monadConstructor && !monadConstructor.declaration) {
+	if (monadConstructor) {
 		monadValueTypes.add(monadConstructor)
 	}
 

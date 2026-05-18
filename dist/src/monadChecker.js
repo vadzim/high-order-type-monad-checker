@@ -57,10 +57,10 @@ export function getMonadViolations(graph, options) {
     }
     const callToOwner = new Map(graph.types.values().flatMap(type => allCallsForType(type).map(call => [call, type])));
     const monadValueTypes = new Set();
-    if (monadConsumer && !monadConsumer.declaration) {
+    if (monadConsumer) {
         monadValueTypes.add(monadConsumer);
     }
-    if (monadConstructor && !monadConstructor.declaration) {
+    if (monadConstructor) {
         monadValueTypes.add(monadConstructor);
     }
     for (const type of graph.types) {
@@ -1025,7 +1025,8 @@ export function getMonadViolations(graph, options) {
         // Check if root is a type reference that resolves to a tuple with consumer
         if (root.type.ref && root.type.ref.kind === "typeAlias") {
             const resolvedBody = body(root.type.ref);
-            if (resolvedBody && (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
+            if (resolvedBody &&
+                (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
                 if (hasMonadConsumerInTuple(resolvedBody))
                     return resolvedBody;
             }
@@ -1040,7 +1041,8 @@ export function getMonadViolations(graph, options) {
         // Check if root is a type reference that resolves to a tuple
         if (root.type.ref && root.type.ref.kind === "typeAlias") {
             const resolvedBody = body(root.type.ref);
-            if (resolvedBody && (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
+            if (resolvedBody &&
+                (resolvedBody.type.name === "<tuple>" || resolvedBody.type.name === "<readonlyTuple>")) {
                 return resolvedBody;
             }
         }
