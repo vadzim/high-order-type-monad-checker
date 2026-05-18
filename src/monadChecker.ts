@@ -434,6 +434,88 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 		}
 	}
 
+	// Check conditional patterns for type assignments and monad-related conditionals
+	for (const type of graph.types) {
+		if (type.kind !== "typeAlias") continue
+
+		// Skip checking the monad module types themselves (constructor, reader, consumer)
+		if (type === monadConstructor || type === monadReader || type === monadConsumer) continue
+
+		// Only check top-level conditionals in the type body, not nested ones
+		const typeBody = body(type)
+		if (!typeBody || typeBody.type.name !== "<conditional>") continue
+
+		const conditional = typeBody
+		const extendsCall = conditional.arguments[0]
+		const trueRoot = conditional.arguments[1]
+		const falseRoot = conditional.arguments[2]
+		if (!extendsCall || !trueRoot || !falseRoot) continue
+
+		// Check if this is a type assignment pattern: ... extends infer X ? ... : ...
+		const isTypeAssignment = isSimpleInferPattern(extendsCall)
+
+		// Check if this is pattern matching (infer with constraints)
+		const isPatternMatching = isPatternMatchingConditional(extendsCall)
+
+		// Check if this conditional is monad-related (only check the type being validated, not nested types)
+		const isMonadRelated = hasMonadInput(type)
+
+		if (isTypeAssignment && !isMonadRelated) {
+			// Pattern: ... extends infer X ? ... : never
+			// Else branch must be "never"
+			if (falseRoot.type.name !== "never") {
+				violations.push({
+					owner: callToOwner.get(conditional) ?? type,
+					violation: {
+						kind: "conditional.typeAssignmentElseMustBeNever",
+						message: `Type assignment pattern detected (extends infer without constraints). The else branch must be "never", but found "${falseRoot.type.name}"`,
+						position: falseRoot.position,
+						path: falseRoot.scope.path,
+						related: related({
+							message: "Type assignment pattern is here",
+							position: extendsCall.position,
+							path: extendsCall.scope.path,
+						}),
+					},
+				})
+			}
+		} else if (isMonadRelated && !isTypeAssignment && !isPatternMatching) {
+			// Monad-related conditionals (not pattern matching): neither branch should be "never"
+			if (trueRoot.type.name === "never") {
+				violations.push({
+					owner: callToOwner.get(conditional) ?? type,
+					violation: {
+						kind: "conditional.monadRelatedNeverNotAllowed",
+						message: `Using "never" in the true branch of a monad-related conditional is not allowed. Consider returning an error type instead`,
+						position: trueRoot.position,
+						path: trueRoot.scope.path,
+						related: related({
+							message: "Monad-related conditional is here",
+							position: conditional.position,
+							path: conditional.scope.path,
+						}),
+					},
+				})
+			}
+			if (falseRoot.type.name === "never") {
+				violations.push({
+					owner: callToOwner.get(conditional) ?? type,
+					violation: {
+						kind: "conditional.monadRelatedNeverNotAllowed",
+						message: `Using "never" in the else branch of a monad-related conditional is not allowed. Consider returning an error type instead`,
+						position: falseRoot.position,
+						path: falseRoot.scope.path,
+						related: related({
+							message: "Monad-related conditional is here",
+							position: conditional.position,
+							path: conditional.scope.path,
+						}),
+					},
+				})
+			}
+		}
+	}
+
 	const ownerKinds = new Map<CGType, Set<string>>()
 	const ownerViolations = new Map<CGType, MonadViolation[]>()
 	for (const record of violations) {
@@ -926,6 +1008,65 @@ export function getMonadViolations(graph: ContentGraph, options: MonadTypeOption
 			current = current.parent
 		}
 		return null
+	}
+
+	function isSimpleInferPattern(extendsCall: CGCall): boolean {
+		// Pattern: ... extends infer X ? ... : ...
+		// Check if right side of extends is a simple infer without constraints
+		if (extendsCall.type.name !== "<extends>") return false
+		const rightSide = extendsCall.arguments[1]
+		if (!rightSide) return false
+
+		// Check if it's an infer with a type declaration
+		if (rightSide.type.name === "<extends>") {
+			const leftOfExtends = rightSide.arguments[0]
+			if (leftOfExtends?.type.name === "<typeDeclaration>") {
+				// This is "infer X extends Something" - has constraints, not a simple assignment
+				return false
+			}
+		}
+
+		// Check if it's just a type declaration (infer X without extends)
+		if (rightSide.type.name === "<typeDeclaration>") {
+			// This is "infer X" without constraints - simple assignment
+			return true
+		}
+
+		return false
+	}
+
+	function isPatternMatchingConditional(extendsCall: CGCall): boolean {
+		// Check if this is a pattern matching conditional with constrained infers
+		// Pattern matching with constraints like [infer X extends Monad, infer Y extends string]
+		// is allowed to use never as fallback
+		if (extendsCall.type.name !== "<extends>") return false
+		const rightSide = extendsCall.arguments[1]
+		if (!rightSide) return false
+
+		// Check for tuple/array patterns with constrained infer
+		if (rightSide.type.name === "<tuple>" || rightSide.type.name === "<readonlyTuple>") {
+			// Check if any element has infer with meaningful constraints (not unknown)
+			const results: boolean[] = []
+			for (const arg of rightSide.arguments) {
+				if (arg.type.name === "<extends>" && arg.arguments[0]?.type.name === "<typeDeclaration>") {
+					const constraint = arg.arguments[1]
+					const isConstrained = constraint && constraint.type.name !== "unknown"
+					results.push(isConstrained)
+				}
+			}
+			const hasConstrainedInfer = results.some(r => r)
+			return hasConstrainedInfer
+		}
+
+		// Check for direct infer with meaningful constraint
+		if (rightSide.type.name === "<extends>" && rightSide.arguments[0]?.type.name === "<typeDeclaration>") {
+			const constraint = rightSide.arguments[1]
+			if (constraint && constraint.type.name !== "unknown") {
+				return true
+			}
+		}
+
+		return false
 	}
 }
 

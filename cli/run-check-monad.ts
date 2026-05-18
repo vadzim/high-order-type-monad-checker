@@ -19,6 +19,7 @@ type ParsedCli = {
 	options: FormatSourceSnippetOptions
 	monadTypes: MonadTypeOption[]
 	strict: boolean
+	onlyOne: boolean
 }
 
 type CliStreams = {
@@ -76,6 +77,7 @@ export async function runCli(argv: string[], streams: CliStreams = console) {
 				paths.map(async filePath => [filePath, await readFile(filePath, { encoding: "utf8" })] as const),
 			),
 		)
+
 		if (cli.strict) {
 			const loadedFiles = new Set(paths.map(filePath => path.resolve(filePath)))
 			const missingMonadModules = Array.from(
@@ -95,32 +97,25 @@ export async function runCli(argv: string[], streams: CliStreams = console) {
 		const graph = concatContentGraphs(
 			files.entries().map(([filePath, content]) => buildContentGraph(filePath, content)),
 		)
+
 		const violations = cli.monadTypes.flatMap(monadType =>
 			getMonadViolations(graph, { ...monadType, strictMonadModule: cli.strict }),
 		)
 
-		let errorCount = 0
-		const emittedViolations: typeof violations = []
-		for (const violation of violations) {
-			const formatted = formatGraphViolation(violation, files, cli.options)
-			if (formatted) {
-				streams.error(formatted + "\n")
-				errorCount++
-				emittedViolations.push(violation)
-			}
-		}
+		const formatted = violations.map(violation => formatGraphViolation(violation, files, cli.options))
+		console.error((cli.onlyOne ? formatted.slice(0, 1) : formatted).join("\n"))
 
-		const fileStats = summarizeFiles(emittedViolations, files)
+		const fileStats = summarizeFiles(violations, files)
 		const fileCount = fileStats.length
 		const checkedFileCount = files.size
 		const checkedFileLabel = checkedFileCount === 1 ? "file" : "files"
-		const errorLabel = errorCount === 1 ? "error" : "errors"
+		const errorLabel = violations.length === 1 ? "error" : "errors"
 		const fileLabel = fileCount === 1 ? "file" : "files"
 		streams.log(`Checked ${checkedFileCount} ${checkedFileLabel}.`)
-		if (errorCount === 0) {
+		if (violations.length === 0) {
 			streams.log("Found 0 errors.")
 		} else {
-			streams.log(`Found ${errorCount} ${errorLabel} in ${fileCount} ${fileLabel}.`)
+			streams.log(`Found ${violations.length} ${errorLabel} in ${fileCount} ${fileLabel}.`)
 		}
 		if (fileStats.length > 0) {
 			streams.log("")
@@ -130,7 +125,7 @@ export async function runCli(argv: string[], streams: CliStreams = console) {
 			}
 		}
 
-		return errorCount > 0 ? 1 : 0
+		return violations.length > 0 ? 1 : 0
 	} catch (error) {
 		if (error instanceof EInvalidOption) {
 			const message = error instanceof Error ? error.message : String(error)
@@ -172,6 +167,7 @@ function parseCli(argv: string[]): ParsedCli {
 	const monadSpecs: MonadTypeOption[] = []
 	let options: FormatSourceSnippetOptions = { contextBefore: 4, contextAfter: 0 }
 	let strict = true
+	let onlyOne = false
 
 	let i = 0
 	while (i < argv.length) {
@@ -214,6 +210,11 @@ function parseCli(argv: string[]): ParsedCli {
 			i += 1
 			continue
 		}
+		if (token === "-1" || token === "--1") {
+			onlyOne = true
+			i += 1
+			continue
+		}
 		if (token.startsWith("--")) {
 			throw new EInvalidOption(`Unknown option '${token}'.`)
 		}
@@ -226,6 +227,7 @@ function parseCli(argv: string[]): ParsedCli {
 		options,
 		monadTypes: monadSpecs,
 		strict,
+		onlyOne,
 	}
 }
 

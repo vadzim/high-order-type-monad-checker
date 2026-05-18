@@ -1,8 +1,9 @@
 import { formatSourceSnippetFromOffsets } from "./format-source-snippet.js";
 export function formatGraphViolation(violation, files, options = {}) {
     const source = files.get(violation.path);
-    if (!source)
-        return null;
+    if (!source) {
+        throw new Error(`File ${violation.path} is not found`);
+    }
     const position = normalizePosition(violation.position, source);
     let result = formatSourceSnippetFromOffsets(violation.path, `[${violation.kind}] ${violation.message}`, source, position, options);
     const relatedItems = violation.related ? [...violation.related] : [];

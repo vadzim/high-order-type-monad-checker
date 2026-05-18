@@ -5,9 +5,11 @@ export function formatGraphViolation(
 	violation: MonadViolation,
 	files: ReadonlyMap<string, string>,
 	options: FormatSourceSnippetOptions = {},
-): string | null {
+): string {
 	const source = files.get(violation.path)
-	if (!source) return null
+	if (!source) {
+		throw new Error(`File ${violation.path} is not found`)
+	}
 
 	const position = normalizePosition(violation.position, source)
 	let result = formatSourceSnippetFromOffsets(

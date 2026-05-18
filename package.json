@@ -27,7 +27,9 @@
 		"build": "rm -rf dist/* && tsc -p tsconfig.build.json",
 		"prepublishOnly": "npm run build",
 		"test": "npm run --silent typecheck && node --test test/*.test.ts && npm run --silent format:check",
-		"typecheck": "tsgo -p tsconfig.json --noEmit"
+		"typecheck": "tsgo -p tsconfig.json --noEmit",
+		"check-external": "PATH=\"$(pwd)/cli:$(pwd)/.external/repo/node_modules/.bin:$PATH\" eval \"cd .external/repo && $(jq -r '.scripts.monadcheck' .external/repo/package.json)\"",
+		"check-external1": "npm run --silent check-external -- -1"
 	},
 	"repository": {
 		"type": "git",
